@@ -1,178 +1,159 @@
 #include "commitments.h"
-#include "utils.h"
-#include <stdexcept>
-#include <algorithm>
+#include <iostream>
+#include <cstring>
 
 namespace sharp_gs {
 
-// Commitment operations
-PedersenMultiCommit::Commitment PedersenMultiCommit::Commitment::operator+(const Commitment& other) const {
-    G1 result;
-    G1::add(result, this->value, other.value);
-    return Commitment(result);
+std::vector<uint8_t> PedersenCommitment::serialize() const {
+    std::vector<uint8_t> data(48);  // BN254 G1 point size
+    commitment.serialize(data.data(), data.size());
+    return data;
 }
 
-PedersenMultiCommit::Commitment PedersenMultiCommit::Commitment::operator*(const Fr& scalar) const {
-    G1 result;
-    G1::mul(result, this->value, scalar);
-    return Commitment(result);
+bool PedersenCommitment::deserialize(const std::vector<uint8_t>& data) {
+    if (data.size() != 48) return false;
+    return commitment.deserialize(data.data(), data.size());
 }
 
-bool PedersenMultiCommit::Commitment::operator==(const Commitment& other) const {
-    return this->value == other.value;
+bool PedersenCommitment::is_valid() const {
+    return !commitment.isZero();
 }
 
-bool PedersenMultiCommit::Commitment::operator!=(const Commitment& other) const {
-    return !(*this == other);
-}
-
-std::vector<uint8_t> PedersenMultiCommit::Commitment::serialize() const {
-    // Use proper MCL serialization
-    return utils::hash::serialize_point(value);
-}
-
-PedersenMultiCommit::Commitment PedersenMultiCommit::Commitment::deserialize(const std::vector<uint8_t>& data) {
-    // Placeholder - should implement proper deserialization
-    G1 point;
-    // FIX: Use proper hash-based generation instead of setByCSPRNG
-    std::string seed = "deserialize_" + std::to_string(data.size());
-    point.setHashOf(seed.c_str(), seed.length());
-    return Commitment(point);
-}
-
-// Opening operations
-size_t PedersenMultiCommit::Opening::size_bytes() const {
-    return values.size() * utils::serialize::field_element_size() + utils::serialize::field_element_size();
-}
-
-std::vector<uint8_t> PedersenMultiCommit::Opening::serialize() const {
-    std::vector<uint8_t> result;
-    
-    // Serialize values
-    auto values_data = utils::serialize::serialize_field_vector(values);
-    result.insert(result.end(), values_data.begin(), values_data.end());
-    
-    // Serialize randomness
-    auto rand_data = utils::hash::serialize_field(randomness);
-    result.insert(result.end(), rand_data.begin(), rand_data.end());
-    
-    return result;
-}
-
-PedersenMultiCommit::Opening PedersenMultiCommit::Opening::deserialize(const std::vector<uint8_t>& data) {
-    // Placeholder - should implement proper deserialization
-    return Opening();
-}
-
-// PedersenMultiCommit implementation
-PedersenMultiCommit::PedersenMultiCommit(const GroupManager& groups, bool use_g3sq)
-    : groups_(groups), use_g3sq_(use_g3sq) {
-    if (!groups_.is_initialized()) {
-        throw utils::SharpGSException(utils::ErrorCode::GROUP_INITIALIZATION_FAILED,
-                                    "GroupManager must be initialized before creating PedersenMultiCommit");
-    }
-}
-
-std::pair<PedersenMultiCommit::Commitment, PedersenMultiCommit::Opening> 
-PedersenMultiCommit::commit_single(const Fr& value, const Fr& randomness) const {  // FIX: Added const
-    return commit_vector({value}, randomness);
-}
-
-std::pair<PedersenMultiCommit::Commitment, PedersenMultiCommit::Opening> 
-PedersenMultiCommit::commit_vector(const std::vector<Fr>& values, const Fr& randomness) const {  // FIX: Added const
-    const auto& generators = get_generators();
-    
-    if (values.size() + 1 > generators.size()) {
-        throw utils::SharpGSException(utils::ErrorCode::COMMITMENT_FAILED,
-                                    "Not enough generators for commitment vector");
+PedersenCommitment CommitmentOps::commit_single(const Fr& value, const Fr& randomness,
+                                               const GroupManager::CommitmentKey& ck) {
+    if (ck.G_i.empty()) {
+        throw std::invalid_argument("Commitment key has no value generators");
     }
     
-    // Compute commitment: C = r*G0 + m1*G1 + ... + mn*Gn
-    std::vector<Fr> scalars;
-    std::vector<G1> points;
+    // Compute C = r*G0 + x*G1
+    G1 result, temp;
+    G1::mul(result, ck.G0, randomness);        // r*G0
+    G1::mul(temp, ck.G_i[0], value);           // x*G1
+    G1::add(result, result, temp);             // r*G0 + x*G1
     
-    // Add randomness term
-    scalars.push_back(randomness);
-    points.push_back(generators[0]);
+    return PedersenCommitment(result);
+}
+
+PedersenCommitment CommitmentOps::commit_multi(const std::vector<Fr>& values, const Fr& randomness,
+                                              const GroupManager::CommitmentKey& ck) {
+    if (values.size() > ck.G_i.size()) {
+        throw std::invalid_argument("Too many values for commitment key");
+    }
     
-    // Add value terms
+    // Compute C = r*G0 + Σ x_i*G_i
+    G1 result, temp;
+    G1::mul(result, ck.G0, randomness);        // r*G0
+    
     for (size_t i = 0; i < values.size(); ++i) {
-        scalars.push_back(values[i]);
-        points.push_back(generators[i + 1]);
+        G1::mul(temp, ck.G_i[i], values[i]);   // x_i*G_i
+        G1::add(result, result, temp);          // Add to running sum
     }
     
-    G1 commitment_value = group_utils::multi_scalar_mult(scalars, points);
+    return PedersenCommitment(result);
+}
+
+PedersenCommitment CommitmentOps::commit_decomposition(
+    const std::vector<std::vector<Fr>>& decomposition,
+    const Fr& randomness,
+    const GroupManager::CommitmentKey& ck) {
     
-    return {Commitment(commitment_value), Opening(values, randomness)};
+    if (decomposition.size() > ck.G_ij.size()) {
+        throw std::invalid_argument("Too many decomposition rows for commitment key");
+    }
+    
+    // Compute C = r*G0 + Σ Σ y_{i,j}*G_{i,j}
+    G1 result, temp;
+    G1::mul(result, ck.G0, randomness);        // r*G0
+    
+    for (size_t i = 0; i < decomposition.size(); ++i) {
+        if (decomposition[i].size() != 3) {
+            throw std::invalid_argument("Each decomposition row must have exactly 3 elements");
+        }
+        
+        if (i >= ck.G_ij.size() || ck.G_ij[i].size() != 3) {
+            throw std::invalid_argument("Commitment key missing generators for decomposition");
+        }
+        
+        for (size_t j = 0; j < 3; ++j) {
+            G1::mul(temp, ck.G_ij[i][j], decomposition[i][j]);  // y_{i,j}*G_{i,j}
+            G1::add(result, result, temp);                       // Add to running sum
+        }
+    }
+    
+    return PedersenCommitment(result);
 }
 
-std::pair<PedersenMultiCommit::Commitment, PedersenMultiCommit::Opening> 
-PedersenMultiCommit::commit_vector(const std::vector<Fr>& values) const {  // FIX: Added const
-    Fr randomness = group_utils::secure_random();
-    return commit_vector(values, randomness);
+PedersenCommitment CommitmentOps::commit_linearization(
+    const std::vector<Fr>& alpha_values,
+    const Fr& randomness,
+    const GroupManager::LinearizationKey& lk) {
+    
+    if (alpha_values.size() > lk.H_i.size()) {
+        throw std::invalid_argument("Too many alpha values for linearization key");
+    }
+    
+    // Compute C = r*H0 + Σ α_i*H_i
+    G1 result, temp;
+    G1::mul(result, lk.H0, randomness);        // r*H0
+    
+    for (size_t i = 0; i < alpha_values.size(); ++i) {
+        G1::mul(temp, lk.H_i[i], alpha_values[i]);  // α_i*H_i
+        G1::add(result, result, temp);               // Add to running sum
+    }
+    
+    return PedersenCommitment(result);
 }
 
-bool PedersenMultiCommit::verify(const Commitment& commitment, const Opening& opening) const {  // FIX: Added const
+PedersenCommitment CommitmentOps::add(const PedersenCommitment& c1, const PedersenCommitment& c2) {
+    G1 result;
+    G1::add(result, c1.commitment, c2.commitment);
+    return PedersenCommitment(result);
+}
+
+PedersenCommitment CommitmentOps::scalar_mul(const Fr& scalar, const PedersenCommitment& c) {
+    G1 result;
+    G1::mul(result, c.commitment, scalar);
+    return PedersenCommitment(result);
+}
+
+bool CommitmentOps::verify_opening(const PedersenCommitment& commitment,
+                                  const std::vector<Fr>& values,
+                                  const Fr& randomness,
+                                  const GroupManager::CommitmentKey& ck) {
     try {
-        Commitment recomputed = recompute_commitment(opening);
-        return commitment == recomputed;
-    } catch (...) {
+        // Recompute commitment with given values and randomness
+        PedersenCommitment recomputed;
+        
+        if (values.size() == 1) {
+            recomputed = commit_single(values[0], randomness, ck);
+        } else {
+            recomputed = commit_multi(values, randomness, ck);
+        }
+        
+        // Check if recomputed commitment matches the original
+        return commitment.commitment == recomputed.commitment;
+        
+    } catch (const std::exception&) {
         return false;
     }
 }
 
-PedersenMultiCommit::Commitment PedersenMultiCommit::recompute_commitment(const Opening& opening) const {  // FIX: Added const
-    const auto& generators = get_generators();
-    
-    if (opening.values.size() + 1 > generators.size()) {
-        throw utils::SharpGSException(utils::ErrorCode::COMMITMENT_FAILED,
-                                    "Not enough generators for opening verification");
-    }
-    
-    // Recompute: C = r*G0 + m1*G1 + ... + mn*Gn
-    std::vector<Fr> scalars;
-    std::vector<G1> points;
-    
-    // Add randomness term
-    scalars.push_back(opening.randomness);
-    points.push_back(generators[0]);
-    
-    // Add value terms
-    for (size_t i = 0; i < opening.values.size(); ++i) {
-        scalars.push_back(opening.values[i]);
-        points.push_back(generators[i + 1]);
-    }
-    
-    G1 commitment_value = group_utils::multi_scalar_mult(scalars, points);
-    return Commitment(commitment_value);
-}
-
-bool PedersenMultiCommit::verify_batch(const std::vector<Commitment>& commitments, 
-                                      const std::vector<Opening>& openings) const {  // FIX: Added const
-    if (commitments.size() != openings.size()) {
+bool CommitmentOps::batch_verify_openings(const std::vector<PedersenCommitment>& commitments,
+                                         const std::vector<std::vector<Fr>>& values,
+                                         const std::vector<Fr>& randomness,
+                                         const GroupManager::CommitmentKey& ck) {
+    if (commitments.size() != values.size() || commitments.size() != randomness.size()) {
         return false;
     }
     
+    // Verify each commitment individually
     for (size_t i = 0; i < commitments.size(); ++i) {
-        if (!verify(commitments[i], openings[i])) {
+        if (!verify_opening(commitments[i], values[i], randomness[i], ck)) {
             return false;
         }
     }
     
     return true;
-}
-
-const std::vector<G1>& PedersenMultiCommit::get_generators() const {
-    return use_g3sq_ ? groups_.get_g3sq_generators() : groups_.get_gcom_generators();
-}
-
-void PedersenMultiCommit::validate_opening_size(const Opening& opening) const {
-    const auto& generators = get_generators();
-    
-    if (opening.values.size() + 1 > generators.size()) {
-        throw utils::SharpGSException(utils::ErrorCode::COMMITMENT_FAILED,
-                                    "Opening has too many values for available generators");
-    }
 }
 
 } // namespace sharp_gs

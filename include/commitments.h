@@ -1,110 +1,107 @@
 #pragma once
 
-#include "groups.h"
+#include <mcl/bn.hpp>
 #include <vector>
-#include <optional>
+#include "groups.h"
+
+using namespace mcl;
 
 namespace sharp_gs {
 
 /**
- * @brief Pedersen multi-commitment scheme
+ * @brief Pedersen commitment implementation for SharpGS
  * 
- * Implements commitments of the form: Com(m1,...,mn; r) = r*G0 + m1*G1 + ... + mn*Gn
- * Used for both Gcom and G3sq groups in SharpGS protocol.
+ * Supports both single commitments and multi-commitments as used in the protocol
  */
-class PedersenMultiCommit {
+class PedersenCommitment {
+public:
+    G1 commitment;  // The commitment value
+    
+    PedersenCommitment() = default;
+    PedersenCommitment(const G1& c) : commitment(c) {}
+    
+    bool operator==(const PedersenCommitment& other) const {
+        return commitment == other.commitment;
+    }
+    
+    bool operator!=(const PedersenCommitment& other) const {
+        return !(*this == other);
+    }
+    
+    /**
+     * @brief Serialize commitment to bytes
+     */
+    std::vector<uint8_t> serialize() const;
+    
+    /**
+     * @brief Deserialize commitment from bytes
+     */
+    bool deserialize(const std::vector<uint8_t>& data);
+    
+    /**
+     * @brief Check if commitment is valid (not zero)
+     */
+    bool is_valid() const;
+};
+
+/**
+ * @brief Commitment operations using group keys
+ */
+class CommitmentOps {
 public:
     /**
-     * @brief Commitment value
+     * @brief Commit to single value: C = r*G0 + x*G1
      */
-    struct Commitment {
-        G1 value;
-        
-        explicit Commitment(const G1& val = G1()) : value(val) {}
-        
-        // Arithmetic operations
-        Commitment operator+(const Commitment& other) const;
-        Commitment operator*(const Fr& scalar) const;
-        bool operator==(const Commitment& other) const;
-        bool operator!=(const Commitment& other) const;
-        
-        // Serialization
-        size_t size_bytes() const { return 32; } // Compressed G1 point
-        std::vector<uint8_t> serialize() const;
-        static Commitment deserialize(const std::vector<uint8_t>& data);
-        
-        // Utility
-        bool is_zero() const { return value.isZero(); }
-    };
-    
-    /**
-     * @brief Opening information for commitments
-     */
-    struct Opening {
-        std::vector<Fr> values;
-        Fr randomness;
-        
-        Opening() = default;
-        Opening(const std::vector<Fr>& vals, const Fr& rand) 
-            : values(vals), randomness(rand) {}
-        
-        // Serialization
-        size_t size_bytes() const;
-        std::vector<uint8_t> serialize() const;
-        static Opening deserialize(const std::vector<uint8_t>& data);
-    };
+    static PedersenCommitment commit_single(const Fr& value, const Fr& randomness,
+                                           const GroupManager::CommitmentKey& ck);
 
-private:
-    const GroupManager& groups_;
-    bool use_g3sq_;
+    /**
+     * @brief Commit to multiple values: C = r*G0 + Σ x_i*G_i
+     */
+    static PedersenCommitment commit_multi(const std::vector<Fr>& values, const Fr& randomness,
+                                          const GroupManager::CommitmentKey& ck);
 
-public:
-    explicit PedersenMultiCommit(const GroupManager& groups, bool use_g3sq = false);
-    
     /**
-     * @brief Commit to a single value
+     * @brief Commit to decomposition: C = r*G0 + Σ Σ y_{i,j}*G_{i,j}
      */
-    std::pair<Commitment, Opening> commit_single(const Fr& value, const Fr& randomness) const;  // FIX: Added const
-    
-    /**
-     * @brief Commit to a vector of values
-     */
-    std::pair<Commitment, Opening> commit_vector(const std::vector<Fr>& values, const Fr& randomness) const;  // FIX: Added const
-    
-    /**
-     * @brief Commit with random randomness
-     */
-    std::pair<Commitment, Opening> commit_vector(const std::vector<Fr>& values) const;  // FIX: Added const
-    
-    /**
-     * @brief Verify a commitment opening
-     */
-    bool verify(const Commitment& commitment, const Opening& opening) const;  // FIX: Added const
-    
-    /**
-     * @brief Recompute commitment from opening
-     */
-    Commitment recompute_commitment(const Opening& opening) const;  // FIX: Added const
-    
-    /**
-     * @brief Batch commitment verification
-     */
-    bool verify_batch(const std::vector<Commitment>& commitments, 
-                     const std::vector<Opening>& openings) const;  // FIX: Added const
-    
-    /**
-     * @brief Get the group being used
-     */
-    bool using_g3sq() const { return use_g3sq_; }
-    
-    /**
-     * @brief Get reference to group manager
-     */
-    const GroupManager& groups() const { return groups_; }
+    static PedersenCommitment commit_decomposition(
+        const std::vector<std::vector<Fr>>& decomposition,
+        const Fr& randomness,
+        const GroupManager::CommitmentKey& ck);
 
-private:
-    const std::vector<G1>& get_generators() const;
-    void validate_opening_size(const Opening& opening) const;
+    /**
+     * @brief Commit in linearization group: C = r*H0 + Σ α_i*H_i
+     */
+    static PedersenCommitment commit_linearization(
+        const std::vector<Fr>& alpha_values,
+        const Fr& randomness,
+        const GroupManager::LinearizationKey& lk);
+
+    /**
+     * @brief Add two commitments: C3 = C1 + C2
+     */
+    static PedersenCommitment add(const PedersenCommitment& c1, const PedersenCommitment& c2);
+
+    /**
+     * @brief Scalar multiply commitment: C' = scalar * C
+     */
+    static PedersenCommitment scalar_mul(const Fr& scalar, const PedersenCommitment& c);
+
+    /**
+     * @brief Verify commitment opens to given values
+     */
+    static bool verify_opening(const PedersenCommitment& commitment,
+                              const std::vector<Fr>& values,
+                              const Fr& randomness,
+                              const GroupManager::CommitmentKey& ck);
+
+    /**
+     * @brief Batch verify multiple commitments
+     */
+    static bool batch_verify_openings(const std::vector<PedersenCommitment>& commitments,
+                                     const std::vector<std::vector<Fr>>& values,
+                                     const std::vector<Fr>& randomness,
+                                     const GroupManager::CommitmentKey& ck);
 };
 
 } // namespace sharp_gs

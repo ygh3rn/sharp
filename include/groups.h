@@ -1,100 +1,103 @@
 #pragma once
 
-#include "utils.h"
+#include <mcl/bn.hpp>
 #include <vector>
-#include <memory>
+
+using namespace mcl;
 
 namespace sharp_gs {
 
 /**
- * @brief Group manager for SharpGS protocol
+ * @brief Group manager for SharpGS protocol with group switching
  * 
- * Manages two groups: Gcom (for commitments) and G3sq (for decomposition)
- * as required by the SharpGS protocol.
+ * Manages two groups:
+ * - G_com: Group for value commitments (typically smaller, ~256 bits)
+ * - G_3sq: Group for three-square decomposition (typically larger, ~350 bits)
  */
 class GroupManager {
 public:
-    struct GroupParams {
-        std::vector<G1> generators;
-        Fr modulus;
-        size_t max_batch_size;
+    /**
+     * @brief Commitment key for G_com group
+     */
+    struct CommitmentKey {
+        G1 G0;                           // Generator for randomness
+        std::vector<G1> G_i;             // Generators for values x_i
+        std::vector<std::vector<G1>> G_ij; // Generators for decomposition y_{i,j}
+        size_t max_values;               // Maximum number of values N
         
-        explicit GroupParams(size_t batch_size = 0);
+        CommitmentKey() = default;
+        CommitmentKey(size_t N);
+        void setup(size_t N);
+        bool is_valid() const;
+    };
+
+    /**
+     * @brief Linearization key for G_3sq group  
+     */
+    struct LinearizationKey {
+        G1 H0;                    // Generator for randomness
+        std::vector<G1> H_i;      // Generators for linearization α*_{k,i}
+        size_t max_values;        // Maximum number of values N
+        
+        LinearizationKey() = default;
+        LinearizationKey(size_t N);
+        void setup(size_t N);
+        bool is_valid() const;
     };
 
 private:
-    GroupParams gcom_params_;
-    GroupParams g3sq_params_;
+    CommitmentKey ck_com_;
+    LinearizationKey ck_3sq_;
+    size_t max_batch_size_;
     bool initialized_;
-    
+
 public:
-    GroupManager();
+    GroupManager() : max_batch_size_(0), initialized_(false) {}
     
-    bool initialize(size_t security_bits, size_t range_bits, 
-                   size_t max_batch_size, size_t challenge_bits = 128);
-    
-    // Getters
-    const GroupParams& gcom_params() const { return gcom_params_; }
-    const GroupParams& g3sq_params() const { return g3sq_params_; }
+    /**
+     * @brief Initialize group manager with maximum batch size
+     */
+    void setup(size_t max_batch_size);
+
+    /**
+     * @brief Get commitment key for G_com
+     */
+    const CommitmentKey& get_commitment_key() const { return ck_com_; }
+
+    /**
+     * @brief Get linearization key for G_3sq
+     */
+    const LinearizationKey& get_linearization_key() const { return ck_3sq_; }
+
+    /**
+     * @brief Check if properly initialized
+     */
     bool is_initialized() const { return initialized_; }
-    
-    // Group operations
-    Fr random_scalar(bool use_g3sq = false) const;
-    G1 get_generator(size_t index, bool use_g3sq = false) const;
-    
-    // Generator access for commitments
-    const std::vector<G1>& get_gcom_generators() const { return gcom_params_.generators; }
-    const std::vector<G1>& get_g3sq_generators() const { return g3sq_params_.generators; }
-    
-    // Size queries
-    size_t gcom_generator_count() const { return gcom_params_.generators.size(); }
-    size_t g3sq_generator_count() const { return g3sq_params_.generators.size(); }
 
-private:
-    void setup_gcom_generators(size_t batch_size);
-    void setup_g3sq_generators(size_t batch_size);
-    Fr compute_group_order(size_t required_bits) const;
+    /**
+     * @brief Get maximum supported batch size
+     */
+    size_t get_max_batch_size() const { return max_batch_size_; }
+
+    /**
+     * @brief Generate random group element in G_com
+     */
+    static G1 random_g1_element();
+
+    /**
+     * @brief Hash to curve point (for Fiat-Shamir)
+     */
+    static G1 hash_to_curve(const std::string& input);
+
+    /**
+     * @brief Serialize commitment key
+     */
+    std::vector<uint8_t> serialize_commitment_key() const;
+
+    /**
+     * @brief Deserialize commitment key
+     */
+    bool deserialize_commitment_key(const std::vector<uint8_t>& data);
 };
-
-/**
- * @brief Utility functions for group operations
- */
-namespace group_utils {
-    
-    /**
-     * @brief Multi-scalar multiplication: Σ scalars[i] * points[i]
-     */
-    G1 multi_scalar_mult(const std::vector<Fr>& scalars, const std::vector<G1>& points);
-
-    /**
-     * @brief Check if a scalar is within specified bounds
-     */
-    bool is_scalar_bounded(const Fr& scalar, const Fr& bound);
-
-    /**
-     * @brief Convert integer to field element
-     */
-    Fr int_to_field(int64_t value);
-
-    /**
-     * @brief Convert field element to integer (for small values)
-     */
-    int64_t field_to_int(const Fr& element);
-
-    /**
-     * @brief Generate cryptographically secure random Fr
-     */
-    Fr secure_random();
-
-    /**
-     * @brief Check if field element represents a small integer
-     */
-    bool is_small_integer(const Fr& element, int64_t max_value);
-    
-    /**
-     * @brief Compare two field elements for ordering
-     */
-    bool field_less_than(const Fr& a, const Fr& b);
-}
 
 } // namespace sharp_gs

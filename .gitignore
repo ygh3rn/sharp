@@ -7,7 +7,7 @@ build-*/
 *.dylib
 
 # Executables
-test_sharp_gs
+test_suite
 sharp_gs_demo
 sharp_gs_benchmark
 

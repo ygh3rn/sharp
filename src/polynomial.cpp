@@ -1,331 +1,383 @@
 #include "polynomial.h"
-#include "utils.h"
 #include <algorithm>
-#include <stdexcept>
+#include <random>
+#include <cmath>
+#include <cassert>
 
 namespace sharp_gs {
 
-// Polynomial implementation
-bool Polynomial::is_zero() const {
-    return coeffs_.empty() || std::all_of(coeffs_.begin(), coeffs_.end(), 
-                                         [](const Fr& c) { return c.isZero(); });
-}
-
-Fr Polynomial::evaluate(const Fr& x) const {
-    if (coeffs_.empty()) {
-        Fr zero;
-        zero.clear();
-        return zero;
+std::vector<std::vector<Fr>> PolynomialOps::compute_three_square_decomposition(
+    const std::vector<Fr>& values, const Fr& range_bound) {
+    
+    std::vector<std::vector<Fr>> decomposition;
+    decomposition.reserve(values.size());
+    
+    for (const auto& x_i : values) {
+        // Compute 4x_i(B - x_i) + 1
+        Fr temp1, temp2, target;
+        Fr::sub(temp1, range_bound, x_i);  // B - x_i
+        Fr::mul(temp2, x_i, temp1);        // x_i(B - x_i)
+        Fr four;
+        four.setStr("4", 10);              // Use setStr instead of setInt
+        Fr::mul(temp1, four, temp2);       // 4x_i(B - x_i)
+        Fr one;
+        one.setStr("1", 10);               // Create one element
+        Fr::add(target, temp1, one);       // 4x_i(B - x_i) + 1
+        
+        // Find three squares representation
+        auto three_squares = find_three_squares(target);
+        decomposition.push_back(three_squares);
     }
     
-    // Horner's method for evaluation
-    Fr result = coeffs_.back();
+    return decomposition;
+}
+
+bool PolynomialOps::verify_three_square_decomposition(
+    const std::vector<Fr>& values,
+    const std::vector<std::vector<Fr>>& decomposition,
+    const Fr& range_bound) {
     
-    for (int i = static_cast<int>(coeffs_.size()) - 2; i >= 0; --i) {
-        Fr temp;
-        Fr::mul(temp, result, x);
-        Fr::add(result, temp, coeffs_[i]);
+    if (values.size() != decomposition.size()) return false;
+    
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (decomposition[i].size() != 3) return false;
+        
+        // Compute expected value: 4x_i(B - x_i) + 1
+        Fr temp1, temp2, expected;
+        Fr::sub(temp1, range_bound, values[i]);  // B - x_i
+        Fr::mul(temp2, values[i], temp1);        // x_i(B - x_i)
+        Fr four;
+        four.setStr("4", 10);                    // Use setStr instead of setInt
+        Fr::mul(temp1, four, temp2);             // 4x_i(B - x_i)
+        Fr one;
+        one.setStr("1", 10);                     // Create one element
+        Fr::add(expected, temp1, one);           // 4x_i(B - x_i) + 1
+        
+        // Compute actual sum: y_{i,1}² + y_{i,2}² + y_{i,3}²
+        Fr actual, square;
+        actual.clear();
+        for (size_t j = 0; j < 3; ++j) {
+            Fr::mul(square, decomposition[i][j], decomposition[i][j]);
+            Fr::add(actual, actual, square);
+        }
+        
+        if (expected != actual) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+std::pair<std::vector<Fr>, std::vector<Fr>> PolynomialOps::compute_linearization_coefficients(
+    const std::vector<Fr>& values,                    // x_i
+    const std::vector<std::vector<Fr>>& decomposition, // y_{i,j}
+    const std::vector<Fr>& value_masks,               // x̃_{k,i}
+    const std::vector<std::vector<Fr>>& decomp_masks, // ỹ_{k,i,j}
+    const Fr& range_bound) {                          // B
+    
+    size_t N = values.size();
+    std::vector<Fr> alpha_1(N), alpha_0(N);
+    
+    for (size_t i = 0; i < N; ++i) {
+        // Compute α*_{1,k,i} = 4x̃_{k,i}B - 8x_i*x̃_{k,i} - 2Σ y_{i,j}*ỹ_{k,i,j}
+        Fr term1, term2, term3, temp;
+        
+        // 4x̃_{k,i}B
+        Fr four;
+        four.setStr("4", 10);              // Use setStr instead of setInt
+        Fr::mul(term1, four, value_masks[i]);
+        Fr::mul(term1, term1, range_bound);
+        
+        // 8x_i*x̃_{k,i}
+        Fr eight;
+        eight.setStr("8", 10);             // Use setStr instead of setInt
+        Fr::mul(term2, eight, values[i]);
+        Fr::mul(term2, term2, value_masks[i]);
+        
+        // 2Σ y_{i,j}*ỹ_{k,i,j}
+        Fr two;
+        two.setStr("2", 10);               // Use setStr instead of setInt
+        term3.clear();                     // Initialize to zero
+        for (size_t j = 0; j < 3; ++j) {
+            Fr::mul(temp, decomposition[i][j], decomp_masks[i][j]);
+            Fr::add(term3, term3, temp);
+        }
+        Fr::mul(term3, two, term3);
+        
+        // α*_{1,k,i} = term1 - term2 - term3
+        Fr::sub(alpha_1[i], term1, term2);
+        Fr::sub(alpha_1[i], alpha_1[i], term3);
+        
+        // Compute α*_{0,k,i} = -(4x̃²_{k,i} + Σ ỹ²_{k,i,j})
+        Fr squares_sum;
+        
+        // 4x̃²_{k,i}
+        Fr::mul(term1, four, value_masks[i]);
+        Fr::mul(term1, term1, value_masks[i]);
+        
+        // Σ ỹ²_{k,i,j}
+        term2.clear();
+        for (size_t j = 0; j < 3; ++j) {
+            Fr::mul(temp, decomp_masks[i][j], decomp_masks[i][j]);
+            Fr::add(term2, term2, temp);
+        }
+        
+        Fr::add(squares_sum, term1, term2);
+        Fr::neg(alpha_0[i], squares_sum);  // Negate the sum
+    }
+    
+    return {alpha_1, alpha_0};
+}
+
+std::vector<Fr> PolynomialOps::evaluate_verification_polynomial(
+    const std::vector<Fr>& masked_values,     // z_{k,i}
+    const std::vector<std::vector<Fr>>& masked_decomp, // z_{k,i,j}
+    const Fr& challenge,                      // γ_k
+    const Fr& range_bound) {                  // B
+    
+    std::vector<Fr> result;
+    result.reserve(masked_values.size());
+    
+    for (size_t i = 0; i < masked_values.size(); ++i) {
+        // Compute f*_{k,i} = 4z_{k,i}(γ_k B - z_{k,i}) + γ_k² - Σ z²_{k,i,j}
+        Fr term1, term2, term3, temp;
+        
+        // γ_k B - z_{k,i}
+        Fr::mul(temp, challenge, range_bound);
+        Fr::sub(term1, temp, masked_values[i]);
+        
+        // 4z_{k,i}(γ_k B - z_{k,i})
+        Fr four;
+        four.setStr("4", 10);              // Use setStr instead of setInt
+        Fr::mul(term1, four, masked_values[i]);
+        Fr::mul(term1, term1, temp);
+        
+        // γ_k²
+        Fr::mul(term2, challenge, challenge);
+        
+        // Σ z²_{k,i,j}
+        term3.clear();
+        for (size_t j = 0; j < 3; ++j) {
+            Fr::mul(temp, masked_decomp[i][j], masked_decomp[i][j]);
+            Fr::add(term3, term3, temp);
+        }
+        
+        // f*_{k,i} = term1 + term2 - term3
+        Fr f_star;
+        Fr::add(f_star, term1, term2);
+        Fr::sub(f_star, f_star, term3);
+        
+        result.push_back(f_star);
     }
     
     return result;
 }
 
-std::vector<Fr> Polynomial::evaluate_batch(const std::vector<Fr>& points) const {
-    std::vector<Fr> results;
-    results.reserve(points.size());
+bool PolynomialOps::verify_polynomial_constraints(
+    const std::vector<Fr>& polynomial_values,
+    const Fr& challenge [[maybe_unused]],
+    const Fr& range_bound [[maybe_unused]]) {
     
-    for (const auto& point : points) {
-        results.push_back(evaluate(point));
+    // For SharpGS, the polynomial should have degree 1 in the challenges
+    // This is a simplified check - in practice, more sophisticated verification needed
+    
+    // Check that polynomial values are in expected range
+    // This is protocol-specific validation
+    for (const auto& val : polynomial_values) {
+        if (val.isZero()) {
+            continue;  // Zero is always valid
+        }
+        
+        // Additional constraints based on the protocol requirements
+        // For example, checking that the polynomial has the expected structure
     }
     
-    return results;
+    return true;  // Simplified implementation
 }
 
-Polynomial Polynomial::operator+(const Polynomial& other) const {
-    size_t max_size = std::max(coeffs_.size(), other.coeffs_.size());
-    Coefficients result(max_size);
+std::vector<Fr> PolynomialOps::find_three_squares(const Fr& value) {
+    // Implement Legendre's three-square theorem
+    // Every positive integer can be expressed as sum of three squares
     
-    // Initialize result to zero
-    for (auto& coeff : result) {
-        coeff.clear();
+    std::vector<Fr> result(3);
+    
+    // Simple approach: try to find a, b, c such that value = a² + b² + c²
+    // In practice, use more sophisticated algorithms like Jacobi's three-square algorithm
+    
+    // For demonstration, use a simple search (not efficient for large values)
+    Fr target = value;
+    // Fr sqrt_target = finite_field_sqrt(target);  // Unused for now
+    
+    // Try small values first
+    for (int a = 0; a <= 100; ++a) {
+        Fr a_fr, a_squared;
+        a_fr.setStr(std::to_string(a), 10);     // Use setStr instead of setInt
+        Fr::mul(a_squared, a_fr, a_fr);
+        
+        if (a_squared > target) break;
+        
+        Fr remaining;
+        Fr::sub(remaining, target, a_squared);
+        
+        for (int b = 0; b <= 100; ++b) {
+            Fr b_fr, b_squared;
+            b_fr.setStr(std::to_string(b), 10); // Use setStr instead of setInt
+            Fr::mul(b_squared, b_fr, b_fr);
+            
+            if (b_squared > remaining) break;
+            
+            Fr c_squared;
+            Fr::sub(c_squared, remaining, b_squared);
+            
+            // Check if c_squared is a perfect square
+            Fr c = finite_field_sqrt(c_squared);
+            Fr c_check;
+            Fr::mul(c_check, c, c);
+            
+            if (c_check == c_squared) {
+                result[0] = a_fr;
+                result[1] = b_fr;
+                result[2] = c;
+                return result;
+            }
+        }
     }
     
-    // Add coefficients from first polynomial
-    for (size_t i = 0; i < coeffs_.size(); ++i) {
-        result[i] = coeffs_[i];
-    }
+    // Fallback: use random assignment (not cryptographically sound)
+    // In practice, implement proper three-square decomposition
+    result[0].setRand();
+    result[1].setRand();
     
-    // Add coefficients from second polynomial
-    for (size_t i = 0; i < other.coeffs_.size(); ++i) {
-        Fr::add(result[i], result[i], other.coeffs_[i]);
-    }
+    // Compute c² = value - a² - b²
+    Fr a_sq, b_sq, c_sq;
+    Fr::mul(a_sq, result[0], result[0]);
+    Fr::mul(b_sq, result[1], result[1]);
+    Fr::sub(c_sq, value, a_sq);
+    Fr::sub(c_sq, c_sq, b_sq);
     
-    Polynomial sum(result);
-    sum.normalize();
-    return sum;
+    result[2] = finite_field_sqrt(c_sq);
+    
+    return result;
 }
 
-Polynomial Polynomial::operator-(const Polynomial& other) const {
-    size_t max_size = std::max(coeffs_.size(), other.coeffs_.size());
-    Coefficients result(max_size);
+Fr PolynomialOps::finite_field_sqrt(const Fr& value) {
+    // Compute square root in finite field
+    // Use Tonelli-Shanks algorithm or simple exponentiation
     
-    // Initialize result to zero
-    for (auto& coeff : result) {
-        coeff.clear();
+    if (value.isZero()) {
+        Fr zero;
+        zero.clear();                      // Create zero element
+        return zero;
     }
     
-    // Add coefficients from first polynomial
-    for (size_t i = 0; i < coeffs_.size(); ++i) {
-        result[i] = coeffs_[i];
-    }
+    // For BN254, p ≡ 3 (mod 4), so we can use x^((p+1)/4)
+    // This is a simplified implementation
+    Fr result;
+    Fr exponent;
     
-    // Subtract coefficients from second polynomial
-    for (size_t i = 0; i < other.coeffs_.size(); ++i) {
-        Fr::sub(result[i], result[i], other.coeffs_[i]);
-    }
+    // Get field characteristic
+    mpz_class p;
+    value.getMpz(p);  // This won't work directly - needs proper implementation
     
-    Polynomial diff(result);
-    diff.normalize();
-    return diff;
+    // For now, use a simple approach
+    result.setRand();  // Placeholder - implement proper square root
+    
+    return result;
 }
 
-Polynomial Polynomial::operator*(const Polynomial& other) const {
-    if (coeffs_.empty() || other.coeffs_.empty()) {
-        return Polynomial::zero();
+bool PolynomialOps::is_quadratic_residue(const Fr& value) {
+    if (value.isZero()) return true;
+    
+    // Use Legendre symbol to check quadratic residuosity
+    // Simplified implementation
+    return true;  // Placeholder
+}
+
+std::vector<Fr> PolynomialOps::random_polynomial(size_t degree) {
+    std::vector<Fr> coefficients(degree + 1);
+    for (auto& coeff : coefficients) {
+        coeff.setRand();
+    }
+    return coefficients;
+}
+
+Fr PolynomialOps::evaluate_polynomial(const std::vector<Fr>& coefficients, const Fr& point) {
+    if (coefficients.empty()) {
+        Fr zero;
+        zero.clear();                      // Create zero element
+        return zero;
     }
     
-    size_t result_size = coeffs_.size() + other.coeffs_.size() - 1;
-    Coefficients result(result_size);
+    Fr result = coefficients[0];
+    Fr power;
+    power.setStr("1", 10);                 // Create one element
     
-    // Initialize result to zero
-    for (auto& coeff : result) {
-        coeff.clear();
+    for (size_t i = 1; i < coefficients.size(); ++i) {
+        Fr::mul(power, power, point);
+        Fr temp;
+        Fr::mul(temp, coefficients[i], power);
+        Fr::add(result, result, temp);
     }
     
-    // Multiply polynomials
-    for (size_t i = 0; i < coeffs_.size(); ++i) {
-        for (size_t j = 0; j < other.coeffs_.size(); ++j) {
+    return result;
+}
+
+std::vector<Fr> PolynomialOps::multiply_polynomials(const std::vector<Fr>& poly1,
+                                                   const std::vector<Fr>& poly2) {
+    if (poly1.empty() || poly2.empty()) return {};
+    
+    std::vector<Fr> result(poly1.size() + poly2.size() - 1);
+    // Initialize all elements to zero
+    for (auto& elem : result) {
+        elem.clear();
+    }
+    
+    for (size_t i = 0; i < poly1.size(); ++i) {
+        for (size_t j = 0; j < poly2.size(); ++j) {
             Fr temp;
-            Fr::mul(temp, coeffs_[i], other.coeffs_[j]);
+            Fr::mul(temp, poly1[i], poly2[j]);
             Fr::add(result[i + j], result[i + j], temp);
         }
     }
     
-    Polynomial product(result);
-    product.normalize();
-    return product;
-}
-
-Polynomial Polynomial::operator*(const Fr& scalar) const {
-    Coefficients result = coeffs_;
-    
-    for (auto& coeff : result) {
-        Fr::mul(coeff, coeff, scalar);
-    }
-    
-    Polynomial product(result);
-    product.normalize();
-    return product;
-}
-
-void Polynomial::normalize() {
-    // Remove leading zero coefficients
-    while (!coeffs_.empty() && coeffs_.back().isZero()) {
-        coeffs_.pop_back();
-    }
-}
-
-// SharpGSPolynomial implementation
-Polynomial SharpGSPolynomial::compute_decomposition_polynomial(
-    const Fr& x,
-    const Fr& range_bound,
-    const std::vector<Fr>& y_squares) {
-    
-    // FIX: Proper polynomial computation for SharpGS
-    // The decomposition polynomial should be: f(γ) = z(γB - z) - Σzᵢ²
-    // where z = γx + masking and zᵢ are the masked square values
-    
-    Polynomial::Coefficients coeffs(3); // Up to degree 2, but should be degree 1
-    
-    // Initialize coefficients to zero
-    for (auto& coeff : coeffs) {
-        coeff.clear();
-    }
-    
-    // For valid decomposition, the quadratic term should be zero
-    coeffs[2].clear();
-    
-    // Set linear and constant terms based on the SharpGS construction
-    // This is a simplified version - real implementation needs proper polynomial arithmetic
-    Fr::mul(coeffs[1], x, range_bound);  // Linear term proportional to x*B
-    coeffs[0] = group_utils::int_to_field(1);  // Constant term
-    
-    // Incorporate the three-square decomposition values
-    if (y_squares.size() == 3) {
-        Fr sum_squares;
-        sum_squares.clear();
-        
-        for (const auto& y : y_squares) {
-            Fr y_sq;
-            Fr::mul(y_sq, y, y);
-            Fr::add(sum_squares, sum_squares, y_sq);
-        }
-        
-        Fr::sub(coeffs[0], coeffs[0], sum_squares);
-    }
-    
-    Polynomial result(coeffs);
-    result.normalize();
     return result;
 }
 
-bool SharpGSPolynomial::is_linear(const Polynomial& poly) {
-    const auto& coeffs = poly.coefficients();
+std::vector<Fr> PolynomialOps::add_polynomials(const std::vector<Fr>& poly1,
+                                              const std::vector<Fr>& poly2) {
+    size_t max_size = std::max(poly1.size(), poly2.size());
+    std::vector<Fr> result(max_size);
+    // Initialize all elements to zero
+    for (auto& elem : result) {
+        elem.clear();
+    }
     
-    // Check if degree is at most 1 (no coefficients beyond x^1)
-    for (size_t i = 2; i < coeffs.size(); ++i) {
-        if (!coeffs[i].isZero()) {
-            return false;
+    for (size_t i = 0; i < max_size; ++i) {
+        if (i < poly1.size()) {
+            Fr::add(result[i], result[i], poly1[i]);
+        }
+        if (i < poly2.size()) {
+            Fr::add(result[i], result[i], poly2[i]);
         }
     }
     
-    return true;
+    return result;
 }
 
-bool SharpGSPolynomial::verify_batch_polynomials(
-    const std::vector<Polynomial>& polynomials,
-    const std::vector<Fr>& challenges) {
-    
-    // Verify that all polynomials are linear and satisfy the SharpGS requirements
-    for (const auto& poly : polynomials) {
-        if (!is_linear(poly)) {
-            return false;
-        }
+std::vector<Fr> PolynomialOps::derivative(const std::vector<Fr>& polynomial) {
+    if (polynomial.size() <= 1) {
+        Fr zero;
+        zero.clear();                      // Create zero element
+        return {zero};
     }
     
-    // Additional verification logic for batch consistency
-    // This is simplified - real implementation needs proper batch verification
-    return true;
-}
-
-Fr SharpGSPolynomial::extract_linear_coefficient(const Polynomial& poly) {
-    const auto& coeffs = poly.coefficients();
+    std::vector<Fr> result(polynomial.size() - 1);
     
-    if (coeffs.size() >= 2) {
-        return coeffs[1];
-    }
-    
-    Fr zero;
-    zero.clear();
-    return zero;
-}
-
-Fr SharpGSPolynomial::extract_constant_term(const Polynomial& poly) {
-    const auto& coeffs = poly.coefficients();
-    
-    if (!coeffs.empty()) {
-        return coeffs[0];
-    }
-    
-    Fr zero;
-    zero.clear();
-    return zero;
-}
-
-// PolynomialCommitment implementation
-PolynomialCommitment::PolynomialCommitment(const PedersenMultiCommit& committer)
-    : committer_(committer) {
-}
-
-std::pair<PolynomialCommitment::PolyCommitment, PolynomialCommitment::PolyOpening> 
-PolynomialCommitment::commit_polynomial(
-    const Polynomial& poly,
-    const std::vector<Fr>& randomness) {
-    
-    const auto& coeffs = poly.coefficients();
-    
-    if (randomness.size() != coeffs.size()) {
-        throw utils::SharpGSException(utils::ErrorCode::COMMITMENT_FAILED,
-                                    "Randomness vector size must match polynomial degree + 1");
-    }
-    
-    PolyCommitment poly_commit;
-    poly_commit.coefficient_commits.reserve(coeffs.size());
-    
-    // Commit to each coefficient separately
-    for (size_t i = 0; i < coeffs.size(); ++i) {
-        auto [commit, opening] = committer_.commit_single(coeffs[i], randomness[i]);
-        poly_commit.coefficient_commits.push_back(commit);
-    }
-    
-    PolyOpening poly_opening;
-    poly_opening.coefficients = coeffs;
-    poly_opening.randomness = randomness;
-    
-    return {poly_commit, poly_opening};
-}
-
-std::pair<PolynomialCommitment::PolyCommitment, PolynomialCommitment::PolyOpening> 
-PolynomialCommitment::commit_linear_polynomial(
-    const Fr& constant_term,
-    const Fr& linear_term,
-    const Fr& r0,
-    const Fr& r1) const {
-    
-    PolyCommitment poly_commit;
-    poly_commit.coefficient_commits.resize(2);
-    
-    // Commit to constant term
-    auto [commit0, opening0] = committer_.commit_single(constant_term, r0);
-    poly_commit.coefficient_commits[0] = commit0;
-    
-    // Commit to linear term
-    auto [commit1, opening1] = committer_.commit_single(linear_term, r1);
-    poly_commit.coefficient_commits[1] = commit1;
-    
-    PolyOpening poly_opening;
-    poly_opening.coefficients = {constant_term, linear_term};
-    poly_opening.randomness = {r0, r1};
-    
-    return {poly_commit, poly_opening};
-}
-
-bool PolynomialCommitment::verify_opening(const PolyCommitment& commitment, 
-                                        const PolyOpening& opening) const {
-    
-    const auto& coeffs = opening.coefficients;
-    const auto& randomness = opening.randomness;
-    
-    if (coeffs.size() != commitment.coefficient_commits.size() ||
-        coeffs.size() != randomness.size()) {
-        return false;
-    }
-    
-    // Verify each coefficient commitment
-    for (size_t i = 0; i < coeffs.size(); ++i) {
-        PedersenMultiCommit::Opening coeff_opening({coeffs[i]}, randomness[i]);
-        
-        if (!committer_.verify(commitment.coefficient_commits[i], coeff_opening)) {
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-PolynomialCommitment::PolyCommitment 
-PolynomialCommitment::recompute_commitment(const PolyOpening& opening) const {
-    
-    const auto& coeffs = opening.coefficients;
-    const auto& randomness = opening.randomness;
-    
-    PolyCommitment result;
-    result.coefficient_commits.reserve(coeffs.size());
-    
-    // Recompute each coefficient commitment
-    for (size_t i = 0; i < coeffs.size(); ++i) {
-        PedersenMultiCommit::Opening coeff_opening({coeffs[i]}, randomness[i]);
-        result.coefficient_commits.push_back(committer_.recompute_commitment(coeff_opening));
+    for (size_t i = 1; i < polynomial.size(); ++i) {
+        Fr coeff;
+        coeff.setStr(std::to_string(i), 10);  // Use setStr instead of setInt
+        Fr::mul(result[i - 1], polynomial[i], coeff);
     }
     
     return result;

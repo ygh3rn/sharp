@@ -1,251 +1,216 @@
 #include "masking.h"
-#include "groups.h"  // FIX: Added missing include for group_utils
-#include "utils.h"
+#include <random>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 
 namespace sharp_gs {
 
-// MaskingParams implementation
-bool MaskingParams::validate() const {
-    return overhead >= 10 && overhead <= 128 &&
-           abort_probability > 0.0 && abort_probability < 1.0 &&
-           security_bits >= 80 && security_bits <= 512;
+MaskingScheme::Parameters::Parameters(size_t Lx, size_t Lr, size_t range_bound, 
+                                     size_t challenge_size, size_t hiding_param)
+    : L_x(Lx), L_r(Lr), B(range_bound), Gamma(challenge_size), S(hiding_param) {
+    // Set field modulus (this should be set based on the curve being used)
+    // For BN254, this is approximately 2^254
+    field_modulus.setStr("21888242871839275222246405745257275088548364400416034343698204186575808495617");
 }
 
-// MaskingScheme implementation
-MaskingScheme::MaskingScheme(const MaskingParams& params) : params_(params) {
-    if (!params_.validate()) {
-        throw utils::SharpGSException(utils::ErrorCode::INVALID_PARAMETERS,
-                                    "Invalid masking parameters");
+bool MaskingScheme::Parameters::validate() const {
+    // Basic parameter validation
+    if (L_x == 0 || L_r == 0 || B == 0 || Gamma == 0 || S == 0) {
+        return false;
     }
     
-    // Compute masking bound L = 2^overhead
-    L_.setStr("1", 10);  // FIX: Use setStr instead of setInt
-    Fr two;
-    two.setStr("2", 10);
-    
-    // Compute 2^overhead
-    for (size_t i = 0; i < params_.overhead; ++i) {
-        Fr::mul(L_, L_, two);
+    // Check that masking overhead is reasonable
+    if (L_x < 32 || L_r < 32) {
+        return false;  // Too small for security
     }
+    
+    // Check that parameters don't cause overflow
+    if (get_max_mask_value() == 0) {
+        return false;  // Overflow occurred
+    }
+    
+    return true;
 }
 
-Fr MaskingScheme::generate_mask(const Fr& challenge, const Fr& secret) const {
-    // Generate masking value: masked = challenge * secret + random_mask
-    Fr masked;
-    Fr::mul(masked, challenge, secret);
-    
-    Fr mask = random_mask();
-    Fr::add(masked, masked, mask);
-    
-    return masked;
+size_t MaskingScheme::Parameters::get_max_mask_value() const {
+    // Maximum masked value is (B*Γ + 1)*L_x
+    // Check for overflow
+    if (B > UINT64_MAX / Gamma) return 0;
+    uint64_t temp = B * Gamma;
+    if (temp > UINT64_MAX - 1) return 0;
+    temp += 1;
+    if (temp > UINT64_MAX / L_x) return 0;
+    return temp * L_x;
 }
 
-bool MaskingScheme::is_valid_mask(const Fr& mask, const Fr& bound) const {
-    // Check if masked value is within acceptable bounds
-    return group_utils::is_scalar_bounded(mask, bound);  // FIX: Added group_utils namespace
+double MaskingScheme::Parameters::get_abort_probability() const {
+    // Abort probability is approximately 1/L for uniform rejection sampling
+    return 1.0 / std::min(L_x, L_r);
 }
 
-double MaskingScheme::estimate_abort_probability(const Fr& range_bound) const {
-    // Estimate abort probability based on masking overhead
-    // Simplified calculation: P_abort ≈ range_bound / (2^overhead)
-    
-    // This is a placeholder - real implementation needs proper probability calculation
-    double overhead_factor = std::pow(2.0, static_cast<double>(params_.overhead));
-    double range_factor = 1000.0; // Simplified range representation
-    
-    return std::min(range_factor / overhead_factor, 0.99);
+std::optional<Fr> MaskingScheme::mask_value(const Fr& value, const Fr& mask_randomness) {
+    size_t max_value = params_.get_max_mask_value();
+    return uniform_rejection_sample(value, mask_randomness, max_value);
 }
 
-Fr MaskingScheme::random_mask() const {
-    // Generate random element within masking bound
+std::optional<Fr> MaskingScheme::mask_randomness(const Fr& randomness, const Fr& mask_randomness) {
+    // For randomness masking, we can use the full field
+    // Since randomness masking only needs to hide, not satisfy range checks
+    Fr result;
+    Fr::add(result, randomness, mask_randomness);
+    return result;
+}
+
+Fr MaskingScheme::generate_value_mask() {
+    // Generate random mask from [0, (B*Γ + 1)*L_x]
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    
+    size_t max_value = params_.get_max_mask_value();
+    std::uniform_int_distribution<uint64_t> dis(0, max_value);
+    
     Fr mask;
-    mask.setByCSPRNG();  // Generate random field element
-    
-    // In a real implementation, we would need to ensure this is within [0, L)
-    // For now, we use a random field element as approximation
+    mask.setStr(std::to_string(dis(gen)), 10);  // Use setStr instead of setInt
     return mask;
 }
 
-bool MaskingScheme::within_mask_range(const Fr& value) const {
-    // Check if value is within masking range [0, L)
-    return group_utils::is_scalar_bounded(value, L_);  // FIX: Added group_utils namespace
+Fr MaskingScheme::generate_randomness_mask() {
+    // Generate random mask from [0, S*L_r]
+    std::random_device rd;
+    std::mt19937_64 gen(rd());
+    
+    // Avoid overflow by checking multiplication
+    uint64_t max_value = params_.S;
+    if (max_value <= UINT64_MAX / params_.L_r) {
+        max_value *= params_.L_r;
+    } else {
+        max_value = UINT64_MAX;  // Use maximum representable value
+    }
+    
+    std::uniform_int_distribution<uint64_t> dis(0, max_value);
+    
+    Fr mask;
+    mask.setStr(std::to_string(dis(gen)), 10);  // Use setStr instead of setInt
+    return mask;
 }
 
-// ValueMasking implementation
-std::optional<std::pair<Fr, Fr>> ValueMasking::mask_value(const Fr& value) const {
-    // Rejection sampling for proper masking distribution
-    const size_t max_attempts = 100;
+bool MaskingScheme::is_in_range(const Fr& masked_value, bool is_value_mask) {
+    if (is_value_mask) {
+        // Check if masked value is in [0, (B*Γ + 1)*L_x]
+        Fr max_value;
+        max_value.setStr(std::to_string(params_.get_max_mask_value()), 10);  // Use setStr
+        return masked_value <= max_value;
+    } else {
+        // For randomness masks, check against S*L_r
+        Fr max_value;
+        uint64_t max_rand = params_.S;
+        if (max_rand <= UINT64_MAX / params_.L_r) {
+            max_rand *= params_.L_r;
+        } else {
+            max_rand = UINT64_MAX;
+        }
+        max_value.setStr(std::to_string(max_rand), 10);  // Use setStr
+        return masked_value <= max_value;
+    }
+}
+
+double MaskingScheme::estimate_batch_abort_probability(size_t num_masks) const {
+    double single_prob = params_.get_abort_probability();
+    // Probability that at least one mask aborts in a batch
+    return 1.0 - std::pow(1.0 - single_prob, static_cast<double>(num_masks));
+}
+
+MaskingScheme::RoundMasks MaskingScheme::generate_round_masks(size_t N) {
+    RoundMasks masks(N);
     
-    for (size_t attempt = 0; attempt < max_attempts; ++attempt) {
-        Fr randomness = scheme_.random_mask();
-        Fr masked_value = scheme_.generate_mask(group_utils::int_to_field(1), value);  // FIX: Added group_utils namespace
-        
-        // Check if masking is acceptable
-        if (scheme_.within_mask_range(masked_value)) {
-            return std::make_pair(masked_value, randomness);
+    // Generate value masks x̃_{k,i}
+    for (size_t i = 0; i < N; ++i) {
+        masks.value_masks[i] = generate_value_mask();
+    }
+    
+    // Generate decomposition masks ỹ_{k,i,j}
+    for (size_t i = 0; i < N; ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            masks.decomp_masks[i][j] = generate_value_mask();
         }
     }
     
-    // Failed to find valid masking
-    return std::nullopt;
+    // Generate randomness masks
+    masks.rand_x_mask = generate_randomness_mask();
+    masks.rand_y_mask = generate_randomness_mask();
+    masks.rand_star_mask = generate_randomness_mask();
+    
+    return masks;
 }
 
-std::vector<std::optional<std::pair<Fr, Fr>>> ValueMasking::mask_batch(const std::vector<Fr>& values) const {
-    std::vector<std::optional<std::pair<Fr, Fr>>> results;
-    results.reserve(values.size());
+MaskingScheme::MaskedRound MaskingScheme::apply_round_masking(
+    const std::vector<Fr>& challenge_values,
+    const std::vector<std::vector<Fr>>& challenge_decomp,
+    const Fr& challenge_rand_x,
+    const Fr& challenge_rand_y,
+    const Fr& challenge_rand_star,
+    const RoundMasks& masks) {
     
-    for (const auto& value : values) {
-        results.push_back(mask_value(value));
+    MaskedRound result(challenge_values.size());
+    
+    // Apply masking to values: z_{k,i} = mask(γ_k * x_i, x̃_{k,i})
+    for (size_t i = 0; i < challenge_values.size(); ++i) {
+        auto masked_opt = mask_value(challenge_values[i], masks.value_masks[i]);
+        if (!masked_opt.has_value()) {
+            result.aborted = true;
+            return result;
+        }
+        result.masked_values[i] = masked_opt.value();
     }
     
-    return results;
-}
-
-bool ValueMasking::verify_masked_value(const Fr& original, const Fr& masked, const Fr& randomness) const {
-    // Verify that masked = original + randomness (in simplified model)
-    Fr expected;
-    Fr::add(expected, original, randomness);
-    
-    return expected == masked;
-}
-
-// SharpGSMasking implementation
-SharpGSMasking::SharpGSMasking(const MaskingParams& params) {
-    config_ = std::make_unique<MaskingScheme>(params);
-}
-
-std::optional<Fr> SharpGSMasking::mask_challenged_value(const Fr& challenge, const Fr& value) const {
-    // Generate masked response: z = γx + r where r is random masking
-    Fr masked_response = config_->generate_mask(challenge, value);
-    
-    // Check if the masking is within acceptable bounds
-    Fr bound = config_->masking_bound();
-    if (config_->is_valid_mask(masked_response, bound)) {
-        return masked_response;
+    // Apply masking to decomposition: z_{k,i,j} = mask(γ_k * y_{i,j}, ỹ_{k,i,j})
+    for (size_t i = 0; i < challenge_decomp.size(); ++i) {
+        for (size_t j = 0; j < 3; ++j) {
+            auto masked_opt = mask_value(challenge_decomp[i][j], masks.decomp_masks[i][j]);
+            if (!masked_opt.has_value()) {
+                result.aborted = true;
+                return result;
+            }
+            result.masked_decomp[i][j] = masked_opt.value();
+        }
     }
     
-    return std::nullopt;  // FIX: Return nullopt instead of complex type conversion
-}
-
-std::optional<Fr> SharpGSMasking::mask_randomness(const Fr& challenge, const Fr& randomness) const {
-    // Mask the commitment randomness: s = γr + s' where s' is random
-    Fr masked_randomness = config_->generate_mask(challenge, randomness);
+    // Apply masking to randomness (these don't abort since they use full field)
+    auto masked_rand_x_opt = mask_randomness(challenge_rand_x, masks.rand_x_mask);
+    auto masked_rand_y_opt = mask_randomness(challenge_rand_y, masks.rand_y_mask);
+    auto masked_rand_star_opt = mask_randomness(challenge_rand_star, masks.rand_star_mask);
     
-    Fr bound = config_->masking_bound();
-    if (config_->is_valid_mask(masked_randomness, bound)) {
-        return masked_randomness;
+    if (!masked_rand_x_opt.has_value() || !masked_rand_y_opt.has_value() || 
+        !masked_rand_star_opt.has_value()) {
+        result.aborted = true;
+        return result;
     }
     
-    return std::nullopt;
+    result.masked_rand_x = masked_rand_x_opt.value();
+    result.masked_rand_y = masked_rand_y_opt.value();
+    result.masked_rand_star = masked_rand_star_opt.value();
+    
+    result.aborted = false;
+    return result;
 }
 
-std::vector<std::optional<Fr>> SharpGSMasking::mask_batch_responses(
-    const std::vector<Fr>& challenges,
-    const std::vector<Fr>& values) const {
+std::optional<Fr> MaskingScheme::uniform_rejection_sample(const Fr& value, const Fr& mask, 
+                                                         size_t max_value) {
+    // Uniform rejection sampling: add mask to value, check if in range
+    Fr result;
+    Fr::add(result, value, mask);
     
-    if (challenges.size() != values.size()) {
-        throw utils::SharpGSException(utils::ErrorCode::MASKING_FAILED,
-                                    "Challenges and values must have same size");
+    // Check if result is in valid range [0, max_value]
+    Fr max_fr;
+    max_fr.setStr(std::to_string(max_value), 10);  // Use setStr instead of setInt
+    
+    if (result <= max_fr) {
+        return result;
+    } else {
+        // Abort - caller should retry with new mask
+        return std::nullopt;
     }
-    
-    std::vector<std::optional<Fr>> results;
-    results.reserve(challenges.size());
-    
-    for (size_t i = 0; i < challenges.size(); ++i) {
-        results.push_back(mask_challenged_value(challenges[i], values[i]));
-    }
-    
-    return results;
 }
-
-bool SharpGSMasking::verify_mask_bounds(const Fr& masked_value, const Fr& bound) const {
-    return config_->is_valid_mask(masked_value, bound);
-}
-
-double SharpGSMasking::abort_probability() const {
-    Fr dummy_bound = group_utils::int_to_field(1000);  // FIX: Added group_utils namespace
-    return config_->estimate_abort_probability(dummy_bound);
-}
-
-std::optional<Fr> SharpGSMasking::adaptive_mask(const Fr& challenge, const Fr& value, const Fr& hint) const {
-    // Adaptive masking that uses hint to improve success probability
-    // This is a placeholder - real implementation would use sophisticated techniques
-    
-    Fr adaptive_masked = config_->generate_mask(challenge, value);
-    
-    // Use hint to adjust masking (simplified)
-    Fr adjustment;
-    Fr::mul(adjustment, hint, group_utils::int_to_field(1));  // FIX: Added group_utils namespace
-    Fr::add(adaptive_masked, adaptive_masked, adjustment);
-    
-    Fr bound = config_->masking_bound();
-    if (config_->is_valid_mask(adaptive_masked, bound)) {
-        return adaptive_masked;
-    }
-    
-    return std::nullopt;
-}
-
-// Masking utilities implementation
-namespace masking_utils {
-
-MaskingParams optimize_masking_params(
-    size_t security_bits,
-    double target_abort_prob,
-    size_t range_bits) {
-    
-    // Optimize masking parameters based on security and performance requirements
-    size_t optimal_overhead = security_bits / 2 + range_bits / 4;
-    optimal_overhead = std::max(optimal_overhead, static_cast<size_t>(20));
-    optimal_overhead = std::min(optimal_overhead, static_cast<size_t>(80));
-    
-    return MaskingParams(optimal_overhead, target_abort_prob, security_bits);
-}
-
-double estimate_abort_probability(const Fr& range_bound, size_t overhead) {
-    // Theoretical abort probability calculation
-    // P_abort ≈ B / (2^L) where B is range bound, L is overhead
-    
-    // Simplified calculation - real implementation needs proper arithmetic
-    double overhead_factor = std::pow(2.0, static_cast<double>(overhead));
-    return std::min(1000.0 / overhead_factor, 0.99); // Using 1000 as range approximation
-}
-
-Fr uniform_random(const Fr& bound) {
-    // Generate uniform random element in range [0, bound)
-    // Simplified implementation - real version needs proper uniform sampling
-    Fr random;
-    random.setByCSPRNG();
-    return random;
-}
-
-Fr compute_masking_bound(const Fr& range_bound, size_t overhead) {
-    // Compute L = 2^overhead * B where B is the range bound
-    Fr L;
-    L.setStr("1", 10);  // FIX: Use setStr instead of setInt
-    Fr two;
-    two.setStr("2", 10);
-    
-    // Compute 2^overhead
-    for (size_t i = 0; i < overhead; ++i) {
-        Fr::mul(L, L, two);
-    }
-    
-    // Multiply by range bound
-    Fr::mul(L, L, range_bound);
-    
-    return L;
-}
-
-double statistical_distance(const MaskingParams& params, const Fr& range_bound) {
-    // Compute statistical distance between uniform and masked distributions
-    // Simplified calculation
-    double overhead_factor = std::pow(2.0, static_cast<double>(params.overhead));
-    return 1.0 / overhead_factor; // Simplified bound
-}
-
-} // namespace masking_utils
 
 } // namespace sharp_gs
