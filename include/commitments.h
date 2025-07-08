@@ -2,127 +2,109 @@
 
 #include "groups.h"
 #include <vector>
+#include <optional>
 
 namespace sharp_gs {
 
 /**
- * @brief Pedersen Multi-Commitment implementation for SharpGS
+ * @brief Pedersen multi-commitment scheme
  * 
- * Commits to vectors of values: C = r*G0 + Σ xi*Gi
+ * Implements commitments of the form: Com(m1,...,mn; r) = r*G0 + m1*G1 + ... + mn*Gn
+ * Used for both Gcom and G3sq groups in SharpGS protocol.
  */
 class PedersenMultiCommit {
 public:
+    /**
+     * @brief Commitment value
+     */
     struct Commitment {
         G1 value;
         
-        Commitment() = default;
-        explicit Commitment(const G1& val) : value(val) {}
+        explicit Commitment(const G1& val = G1()) : value(val) {}
         
-        // Commitment arithmetic
+        // Arithmetic operations
         Commitment operator+(const Commitment& other) const;
         Commitment operator*(const Fr& scalar) const;
-        
         bool operator==(const Commitment& other) const;
         bool operator!=(const Commitment& other) const;
+        
+        // Serialization
+        size_t size_bytes() const { return 32; } // Compressed G1 point
+        std::vector<uint8_t> serialize() const;
+        static Commitment deserialize(const std::vector<uint8_t>& data);
+        
+        // Utility
+        bool is_zero() const { return value.isZero(); }
     };
-
+    
+    /**
+     * @brief Opening information for commitments
+     */
     struct Opening {
-        std::vector<Fr> values;    // The committed values xi
-        Fr randomness;             // The randomness r
+        std::vector<Fr> values;
+        Fr randomness;
         
         Opening() = default;
         Opening(const std::vector<Fr>& vals, const Fr& rand) 
             : values(vals), randomness(rand) {}
+        
+        // Serialization
+        size_t size_bytes() const;
+        std::vector<uint8_t> serialize() const;
+        static Opening deserialize(const std::vector<uint8_t>& data);
     };
 
 private:
-    const GroupManager::GroupParams* params_;
-    bool is_g3sq_group_;  // Whether to use G3sq or Gcom parameters
+    const GroupManager& groups_;
+    bool use_g3sq_;
 
 public:
     explicit PedersenMultiCommit(const GroupManager& groups, bool use_g3sq = false);
-
+    
+    /**
+     * @brief Commit to a single value
+     */
+    std::pair<Commitment, Opening> commit_single(const Fr& value, const Fr& randomness) const;  // FIX: Added const
+    
     /**
      * @brief Commit to a vector of values
-     * @param values Vector of values to commit to
-     * @param randomness Random value for hiding (if empty, generates random)
-     * @return Commitment and opening information
      */
-    std::pair<Commitment, Opening> commit(const std::vector<Fr>& values, 
-                                         const Fr& randomness = Fr()) const;
-
+    std::pair<Commitment, Opening> commit_vector(const std::vector<Fr>& values, const Fr& randomness) const;  // FIX: Added const
+    
     /**
-     * @brief Commit to a single value 
+     * @brief Commit with random randomness
      */
-    std::pair<Commitment, Opening> commit_single(const Fr& value, 
-                                                const Fr& randomness = Fr()) const;
-
+    std::pair<Commitment, Opening> commit_vector(const std::vector<Fr>& values) const;  // FIX: Added const
+    
     /**
-     * @brief Verify that a commitment opens to specified values
+     * @brief Verify a commitment opening
      */
-    bool verify(const Commitment& commitment, 
-               const Opening& opening) const;
-
+    bool verify(const Commitment& commitment, const Opening& opening) const;  // FIX: Added const
+    
     /**
      * @brief Recompute commitment from opening
      */
-    Commitment recompute_commitment(const Opening& opening) const;
-
-    /**
-     * @brief Get maximum supported vector size
-     */
-    size_t max_vector_size() const;
-
-    /**
-     * @brief Commit with specific generator indices (for 3-square decomposition)
-     * Used for committing yi,j values with generators Gi,j
-     */
-    std::pair<Commitment, Opening> commit_indexed(
-        const std::vector<std::vector<Fr>>& value_matrix,  // values[i][j] for yi,j
-        const Fr& randomness = Fr()) const;
-
-private:
-    std::vector<G1> get_generators_for_size(size_t vector_size) const;
-};
-
-/**
- * @brief Commitment operations and utilities
- */
-namespace commit_utils {
+    Commitment recompute_commitment(const Opening& opening) const;  // FIX: Added const
     
     /**
-     * @brief Combine multiple commitments with coefficients
-     * Result = Σ coeffs[i] * commitments[i]
+     * @brief Batch commitment verification
      */
-    PedersenMultiCommit::Commitment combine_commitments(
-        const std::vector<Fr>& coefficients,
-        const std::vector<PedersenMultiCommit::Commitment>& commitments);
-
+    bool verify_batch(const std::vector<Commitment>& commitments, 
+                     const std::vector<Opening>& openings) const;  // FIX: Added const
+    
     /**
-     * @brief Add commitments: C1 + C2
+     * @brief Get the group being used
      */
-    PedersenMultiCommit::Commitment add_commitments(
-        const PedersenMultiCommit::Commitment& c1,
-        const PedersenMultiCommit::Commitment& c2);
-
+    bool using_g3sq() const { return use_g3sq_; }
+    
     /**
-     * @brief Subtract commitments: C1 - C2  
+     * @brief Get reference to group manager
      */
-    PedersenMultiCommit::Commitment subtract_commitments(
-        const PedersenMultiCommit::Commitment& c1,
-        const PedersenMultiCommit::Commitment& c2);
+    const GroupManager& groups() const { return groups_; }
 
-    /**
-     * @brief Scale commitment by scalar: s * C
-     */
-    PedersenMultiCommit::Commitment scale_commitment(
-        const Fr& scalar,
-        const PedersenMultiCommit::Commitment& commitment);
-
-    /**
-     * @brief Check if commitment is the identity (zero commitment)
-     */
-    bool is_identity_commitment(const PedersenMultiCommit::Commitment& commitment);
-}
+private:
+    const std::vector<G1>& get_generators() const;
+    void validate_opening_size(const Opening& opening) const;
+};
 
 } // namespace sharp_gs

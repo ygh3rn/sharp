@@ -4,7 +4,6 @@
 #include "commitments.h"
 #include "masking.h"
 #include "polynomial.h"
-#include "utils.h"
 #include <vector>
 #include <optional>
 #include <memory>
@@ -52,6 +51,7 @@ public:
             
         bool is_valid() const;
         size_t batch_size() const { return value_commitments.size(); }
+        size_t size_bytes() const;
     };
 
     /**
@@ -75,159 +75,132 @@ public:
     struct Transcript {
         // First flow (Prover -> Verifier)
         PedersenMultiCommit::Commitment decomposition_commitment;  // Cy
-        std::vector<std::vector<PedersenMultiCommit::Commitment>> round_commitments; // Per repetition
-        std::optional<std::vector<uint8_t>> commitment_hash;      // Hash optimization
+        std::vector<std::vector<PedersenMultiCommit::Commitment>> round_commitments; // Per round commitments
+        std::optional<std::vector<uint8_t>> commitment_hash;       // Hash optimization
         
-        // Second flow (Verifier -> Prover)  
-        std::vector<Fr> challenges;  // γk for k ∈ [1, R]
+        // Second flow (Verifier -> Prover) 
+        std::vector<Fr> challenges;  // γ₁, ..., γᵣ
         
         // Third flow (Prover -> Verifier)
-        std::vector<std::vector<Fr>> masked_values;      // zk,i for each repetition k
-        std::vector<std::vector<Fr>> masked_randomness;  // tk,x, tk,y, tk,* for each k
+        std::vector<std::vector<Fr>> masked_values;     // z values per round
+        std::vector<std::vector<Fr>> masked_randomness; // Masked commitment randomness
         
-        Transcript() = default;
         bool is_complete() const;
         size_t size_bytes() const;
     };
 
     /**
-     * @brief Proof structure
+     * @brief Zero-knowledge proof
      */
     struct Proof {
         Transcript transcript;
-        Parameters parameters;
         
-        Proof() = default;
-        Proof(const Transcript& trans, const Parameters& params)
-            : transcript(trans), parameters(params) {}
-            
-        bool is_valid() const;
+        bool is_valid() const { return transcript.is_complete(); }
         size_t size_bytes() const { return transcript.size_bytes(); }
+        
+        // Serialization
+        std::vector<uint8_t> serialize() const;
+        static std::optional<Proof> deserialize(const std::vector<uint8_t>& data);
     };
 
 private:
     Parameters params_;
-    std::unique_ptr<GroupManager> groups_;
+    std::unique_ptr<GroupManager> groups_;             // FIX: Made accessible via getter
     std::unique_ptr<PedersenMultiCommit> gcom_committer_;
     std::unique_ptr<PedersenMultiCommit> g3sq_committer_;
     std::unique_ptr<SharpGSMasking> masking_;
     bool initialized_;
 
 public:
-    /**
-     * @brief Constructor
-     */
-    explicit SharpGS(const Parameters& params = Parameters());
+    explicit SharpGS(const Parameters& params);
+    ~SharpGS() = default;
+    
+    // Non-copyable but movable
+    SharpGS(const SharpGS&) = delete;
+    SharpGS& operator=(const SharpGS&) = delete;
+    SharpGS(SharpGS&&) = default;
+    SharpGS& operator=(SharpGS&&) = default;
     
     /**
-     * @brief Destructor
-     */
-    ~SharpGS();
-
-    /**
-     * @brief Initialize the protocol with given parameters
+     * @brief Initialize the protocol with computed parameters
      */
     bool initialize();
-
+    
     /**
      * @brief Check if protocol is properly initialized
      */
     bool is_initialized() const { return initialized_; }
-
+    
     /**
      * @brief Get protocol parameters
      */
-    const Parameters& parameters() const { return params_; }
-
+    const Parameters& params() const { return params_; }
+    
+    /**
+     * @brief FIX: Added public getter for groups
+     */
+    const GroupManager& groups() const { return *groups_; }
+    
     /**
      * @brief Generate a range proof
-     * @param statement Public statement (commitments and range bound)
-     * @param witness Secret witness (values and randomness)
-     * @return Proof or nullopt if proof generation failed
      */
     std::optional<Proof> prove(const Statement& statement, const Witness& witness);
-
+    
     /**
      * @brief Verify a range proof
-     * @param statement Public statement
-     * @param proof Proof to verify
-     * @return True if proof is valid
      */
     bool verify(const Statement& statement, const Proof& proof);
+    
+    /**
+     * @brief Batch operations - prove multiple statements together
+     */
+    std::optional<Proof> prove_batch(const std::vector<Statement>& statements, 
+                                    const std::vector<Witness>& witnesses);
+    
+    /**
+     * @brief Batch verification
+     */
+    bool verify_batch(const std::vector<Statement>& statements, const Proof& proof);
 
     /**
-     * @brief Interactive prover interface
+     * @brief Interactive protocol interfaces
      */
     class InteractiveProver {
     private:
-        SharpGS& protocol_;
+        const SharpGS& protocol_;
         Statement statement_;
         Witness witness_;
         Transcript transcript_;
-        std::vector<std::vector<Fr>> decomposition_values_; // yi,j for each i
-        std::vector<Fr> decomp_randomness_;
+        std::vector<std::vector<Fr>> decomposition_values_;
         bool state_valid_;
-
+        
     public:
-        InteractiveProver(SharpGS& protocol, const Statement& stmt, const Witness& wit);
+        InteractiveProver(const SharpGS& protocol, const Statement& stmt, const Witness& wit);
         
-        /**
-         * @brief First flow: compute and send commitments
-         */
-        std::optional<std::vector<uint8_t>> first_flow();
+        std::vector<uint8_t> first_flow();
+        bool second_flow(const std::vector<Fr>& challenges);
+        std::vector<uint8_t> third_flow();
         
-        /**
-         * @brief Second flow: receive challenges
-         */
-        bool receive_challenges(const std::vector<Fr>& challenges);
-        
-        /**
-         * @brief Third flow: compute and send responses
-         */
-        std::optional<std::vector<uint8_t>> third_flow();
-        
-        /**
-         * @brief Get completed transcript
-         */
-        const Transcript& get_transcript() const { return transcript_; }
-        
+        const Transcript& transcript() const { return transcript_; }
         bool is_valid_state() const { return state_valid_; }
     };
 
-    /**
-     * @brief Interactive verifier interface  
-     */
     class InteractiveVerifier {
     private:
-        SharpGS& protocol_;
+        const SharpGS& protocol_;
         Statement statement_;
         Transcript transcript_;
         bool state_valid_;
-
+        
     public:
-        InteractiveVerifier(SharpGS& protocol, const Statement& stmt);
+        InteractiveVerifier(const SharpGS& protocol, const Statement& stmt);
         
-        /**
-         * @brief First flow: receive commitments
-         */
         bool receive_first_flow(const std::vector<uint8_t>& message);
-        
-        /**
-         * @brief Second flow: generate and send challenges
-         */
-        std::vector<Fr> generate_challenges();
-        
-        /**
-         * @brief Third flow: receive and verify responses
-         */
+        std::vector<Fr> second_flow();
         bool receive_third_flow(const std::vector<uint8_t>& message);
         
-        /**
-         * @brief Final verification
-         */
-        bool verify();
-        
-        const Transcript& get_transcript() const { return transcript_; }
+        bool final_verification();
+        const Transcript& transcript() const { return transcript_; }
         bool is_valid_state() const { return state_valid_; }
     };
 
@@ -253,24 +226,24 @@ private:
     std::vector<std::vector<Fr>> compute_three_square_decomposition(
         const std::vector<Fr>& values, 
         const Fr& range_bound
-    );
+    ) const;  // FIX: Added const
     
     bool verify_decomposition_commitments(
         const Transcript& transcript,
         const Statement& statement
-    );
+    ) const;  // FIX: Added const
     
     bool verify_polynomial_relations(
         const Transcript& transcript,
         const Statement& statement
-    );
+    ) const;  // FIX: Added const
     
     std::vector<Fr> compute_polynomial_coefficients(
         const std::vector<Fr>& masked_values,
         const std::vector<Fr>& masked_squares,
         const Fr& challenge,
         const Fr& range_bound
-    );
+    ) const;  // FIX: Added const
 };
 
 /**

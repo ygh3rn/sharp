@@ -1,81 +1,54 @@
 #pragma once
 
-#include <mcl/bn.hpp>
+#include "utils.h"
 #include <vector>
 #include <memory>
-
-using namespace mcl;
 
 namespace sharp_gs {
 
 /**
- * @brief Group configuration and operations for SharpGS
+ * @brief Group manager for SharpGS protocol
  * 
- * SharpGS uses two groups:
- * - Gcom: for commitments (order p)
- * - G3sq: for 3-square decomposition proof (order q)
+ * Manages two groups: Gcom (for commitments) and G3sq (for decomposition)
+ * as required by the SharpGS protocol.
  */
 class GroupManager {
 public:
     struct GroupParams {
-        std::vector<G1> generators;  // G0, G1, ..., GN, Gi,j for commitments
-        Fr modulus;                  // Group order (p or q)
-        size_t max_batch_size;       // Maximum supported batch size N
+        std::vector<G1> generators;
+        Fr modulus;
+        size_t max_batch_size;
         
-        GroupParams() = default;
-        GroupParams(size_t batch_size);
+        explicit GroupParams(size_t batch_size = 0);
     };
 
 private:
-    GroupParams gcom_params_;    // Parameters for Gcom group
-    GroupParams g3sq_params_;    // Parameters for G3sq group
+    GroupParams gcom_params_;
+    GroupParams g3sq_params_;
     bool initialized_;
-
+    
 public:
     GroupManager();
-    ~GroupManager() = default;
-
-    /**
-     * @brief Initialize groups with specified parameters
-     * @param security_bits Security parameter λ (e.g., 128)
-     * @param range_bits Range size log₂(B)
-     * @param max_batch_size Maximum number of values to prove simultaneously
-     * @param challenge_bits Challenge space size log₂(Γ)
-     */
-    bool initialize(size_t security_bits, 
-                   size_t range_bits, 
-                   size_t max_batch_size = 1,
-                   size_t challenge_bits = 128);
-
-    /**
-     * @brief Get commitment group parameters
-     */
-    const GroupParams& get_gcom_params() const { return gcom_params_; }
-
-    /**
-     * @brief Get 3-square group parameters  
-     */
-    const GroupParams& get_g3sq_params() const { return g3sq_params_; }
-
-    /**
-     * @brief Check if groups are properly initialized
-     */
+    
+    bool initialize(size_t security_bits, size_t range_bits, 
+                   size_t max_batch_size, size_t challenge_bits = 128);
+    
+    // Getters
+    const GroupParams& gcom_params() const { return gcom_params_; }
+    const GroupParams& g3sq_params() const { return g3sq_params_; }
     bool is_initialized() const { return initialized_; }
-
-    /**
-     * @brief Generate random field element in specified group
-     */
+    
+    // Group operations
     Fr random_scalar(bool use_g3sq = false) const;
-
-    /**
-     * @brief Compute minimum group sizes based on parameters
-     */
-    static std::pair<size_t, size_t> compute_group_sizes(
-        size_t security_bits, 
-        size_t range_bits, 
-        size_t challenge_bits,
-        size_t masking_overhead = 40
-    );
+    G1 get_generator(size_t index, bool use_g3sq = false) const;
+    
+    // Generator access for commitments
+    const std::vector<G1>& get_gcom_generators() const { return gcom_params_.generators; }
+    const std::vector<G1>& get_g3sq_generators() const { return g3sq_params_.generators; }
+    
+    // Size queries
+    size_t gcom_generator_count() const { return gcom_params_.generators.size(); }
+    size_t g3sq_generator_count() const { return g3sq_params_.generators.size(); }
 
 private:
     void setup_gcom_generators(size_t batch_size);
@@ -117,6 +90,11 @@ namespace group_utils {
      * @brief Check if field element represents a small integer
      */
     bool is_small_integer(const Fr& element, int64_t max_value);
+    
+    /**
+     * @brief Compare two field elements for ordering
+     */
+    bool field_less_than(const Fr& a, const Fr& b);
 }
 
 } // namespace sharp_gs

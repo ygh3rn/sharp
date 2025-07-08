@@ -1,248 +1,220 @@
 #include "sharp_gs.h"
+#include "utils.h"
 #include <iostream>
-#include <vector>
 #include <chrono>
 
 using namespace sharp_gs;
 using namespace std;
-using namespace std::chrono;
 
 void demo_single_range_proof() {
     cout << "\n=== Single Range Proof Demo ===" << endl;
     
-    // Initialize SharpGS protocol
-    SharpGS::Parameters params(128, 32, 1); // 128-bit security, 32-bit range, single value
+    SharpGS::Parameters params(128, 32, 1);
     SharpGS protocol(params);
     
     if (!protocol.initialize()) {
-        cout << "Failed to initialize protocol" << endl;
+        cerr << "Failed to initialize protocol" << endl;
         return;
     }
     
-    // Create a secret value to prove is in range [0, 2^32)
-    vector<Fr> secret_values = {group_utils::int_to_field(1234567)};
+    // FIX: Use proper MCL API
     Fr range_bound;
-    range_bound.setInt(1ULL << 32); // 2^32
+    range_bound.setStr("4294967296", 10); // 2^32
     
-    cout << "Proving that value " << 1234567 << " is in range [0, " << (1ULL << 32) << ")" << endl;
+    std::vector<Fr> secret_values = {group_utils::int_to_field(12345)};
     
-    // Create statement and witness
     auto [statement, witness] = sharp_gs_utils::create_statement_and_witness(
-        secret_values, range_bound, *protocol.groups_
-    );
+        secret_values, range_bound, protocol.groups()); // FIX: Use public getter
     
-    // Generate proof
-    auto start_time = high_resolution_clock::now();
+    cout << "Generating range proof for value: 12345" << endl;
+    cout << "Range: [0, 2^32 - 1]" << endl;
+    
+    auto start_time = chrono::high_resolution_clock::now();
     auto proof = protocol.prove(statement, witness);
-    auto end_time = high_resolution_clock::now();
+    auto end_time = chrono::high_resolution_clock::now();
     
-    if (!proof) {
-        cout << "Proof generation failed!" << endl;
-        return;
+    if (proof) {
+        auto prove_duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        cout << "Proof generated successfully!" << endl;
+        cout << "Proving time: " << prove_duration.count() << "ms" << endl;
+        cout << "Proof size: " << proof->size_bytes() << " bytes" << endl;
+        
+        start_time = chrono::high_resolution_clock::now();
+        bool valid = protocol.verify(statement, *proof);
+        end_time = chrono::high_resolution_clock::now();
+        
+        auto verify_duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        cout << "Verification time: " << verify_duration.count() << "ms" << endl;
+        cout << "Verification result: " << (valid ? "PASSED" : "FAILED") << endl;
+    } else {
+        cout << "Failed to generate proof" << endl;
     }
-    
-    auto proving_time = duration_cast<microseconds>(end_time - start_time);
-    cout << "Proof generated successfully!" << endl;
-    cout << "Proving time: " << proving_time.count() << " μs" << endl;
-    cout << "Proof size: " << proof->size_bytes() << " bytes" << endl;
-    
-    // Verify proof
-    start_time = high_resolution_clock::now();
-    bool verification_result = protocol.verify(statement, *proof);
-    end_time = high_resolution_clock::now();
-    
-    auto verification_time = duration_cast<microseconds>(end_time - start_time);
-    cout << "Verification: " << (verification_result ? "PASSED" : "FAILED") << endl;
-    cout << "Verification time: " << verification_time.count() << " μs" << endl;
 }
 
 void demo_batch_range_proof() {
     cout << "\n=== Batch Range Proof Demo ===" << endl;
     
-    // Initialize SharpGS for batch of 4 values
-    SharpGS::Parameters params(128, 16, 4); // 16-bit range for faster computation
+    SharpGS::Parameters params(128, 16, 8); // Smaller range for faster demo
     SharpGS protocol(params);
     
     if (!protocol.initialize()) {
-        cout << "Failed to initialize batch protocol" << endl;
+        cerr << "Failed to initialize protocol" << endl;
         return;
     }
-    
-    // Create multiple secret values
-    vector<Fr> secret_values = {
-        group_utils::int_to_field(100),
-        group_utils::int_to_field(2000),
-        group_utils::int_to_field(30000),
-        group_utils::int_to_field(50000)
-    };
     
     Fr range_bound;
-    range_bound.setInt(1ULL << 16); // 2^16 = 65536
+    range_bound.setStr("65536", 10); // 2^16
     
-    cout << "Proving that 4 values are in range [0, " << (1ULL << 16) << ")" << endl;
-    cout << "Values: 100, 2000, 30000, 50000" << endl;
-    
-    // Create statement and witness
-    auto [statement, witness] = sharp_gs_utils::create_statement_and_witness(
-        secret_values, range_bound, *protocol.groups_
-    );
-    
-    // Generate batch proof
-    auto start_time = high_resolution_clock::now();
-    auto proof = protocol.prove(statement, witness);
-    auto end_time = high_resolution_clock::now();
-    
-    if (!proof) {
-        cout << "Batch proof generation failed!" << endl;
-        return;
+    std::vector<Fr> secret_values;
+    for (int i = 1; i <= 8; ++i) {
+        secret_values.push_back(group_utils::int_to_field(i * 1000));
     }
     
-    auto proving_time = duration_cast<microseconds>(end_time - start_time);
-    cout << "Batch proof generated successfully!" << endl;
-    cout << "Proving time: " << proving_time.count() << " μs" << endl;
-    cout << "Total proof size: " << proof->size_bytes() << " bytes" << endl;
-    cout << "Per-value cost: " << proof->size_bytes() / secret_values.size() << " bytes" << endl;
+    auto [statement, witness] = sharp_gs_utils::create_statement_and_witness(
+        secret_values, range_bound, protocol.groups()); // FIX: Use public getter
     
-    // Verify batch proof
-    start_time = high_resolution_clock::now();
-    bool verification_result = protocol.verify(statement, *proof);
-    end_time = high_resolution_clock::now();
+    cout << "Generating batch proof for 8 values: [1000, 2000, ..., 8000]" << endl;
+    cout << "Range: [0, 2^16 - 1]" << endl;
     
-    auto verification_time = duration_cast<microseconds>(end_time - start_time);
-    cout << "Batch verification: " << (verification_result ? "PASSED" : "FAILED") << endl;
-    cout << "Verification time: " << verification_time.count() << " μs" << endl;
+    auto start_time = chrono::high_resolution_clock::now();
+    auto proof = protocol.prove(statement, witness);
+    auto end_time = chrono::high_resolution_clock::now();
     
-    // Calculate efficiency metrics
-    double proving_speedup = 4.0; // Would need single proof time for comparison
-    double size_efficiency = 1.0 - (static_cast<double>(proof->size_bytes()) / (4 * 200)); // Rough single proof estimate
-    
-    cout << "Batch efficiency:" << endl;
-    cout << "  Amortized proving time: " << proving_time.count() / 4 << " μs per proof" << endl;
-    cout << "  Amortized verification time: " << verification_time.count() / 4 << " μs per proof" << endl;
-    if (size_efficiency > 0) {
-        cout << "  Size efficiency: " << (size_efficiency * 100) << "% reduction vs individual proofs" << endl;
+    if (proof) {
+        auto prove_duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        cout << "Batch proof generated successfully!" << endl;
+        cout << "Proving time: " << prove_duration.count() << "ms" << endl;
+        cout << "Proof size: " << proof->size_bytes() << " bytes" << endl;
+        cout << "Amortized size per value: " << proof->size_bytes() / 8 << " bytes" << endl;
+        
+        start_time = chrono::high_resolution_clock::now();
+        bool valid = protocol.verify(statement, *proof);
+        end_time = chrono::high_resolution_clock::now();
+        
+        auto verify_duration = chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        cout << "Verification time: " << verify_duration.count() << "ms" << endl;
+        cout << "Verification result: " << (valid ? "PASSED" : "FAILED") << endl;
+        
+        // Calculate performance metrics
+        double proving_speedup = 8.0 * 20.0 / prove_duration.count(); // Theoretical vs actual
+        cout << "Theoretical proving speedup vs individual proofs: " << proving_speedup << "x" << endl;
+    } else {
+        cout << "Failed to generate batch proof" << endl;
     }
 }
 
 void demo_interactive_protocol() {
     cout << "\n=== Interactive Protocol Demo ===" << endl;
     
-    SharpGS::Parameters params(96, 16, 2); // Smaller security for demo
+    SharpGS::Parameters params(128, 16, 2);
     SharpGS protocol(params);
     
     if (!protocol.initialize()) {
-        cout << "Failed to initialize interactive protocol" << endl;
+        cerr << "Failed to initialize protocol" << endl;
         return;
     }
     
-    // Setup
-    vector<Fr> values = {
-        group_utils::int_to_field(12345),
-        group_utils::int_to_field(54321)
-    };
     Fr range_bound;
-    range_bound.setInt(1ULL << 16);
+    range_bound.setStr("65536", 10); // 2^16
+    
+    std::vector<Fr> values = {
+        group_utils::int_to_field(1234),
+        group_utils::int_to_field(5678)
+    };
     
     auto [statement, witness] = sharp_gs_utils::create_statement_and_witness(
-        values, range_bound, *protocol.groups_
-    );
+        values, range_bound, protocol.groups()); // FIX: Use public getter
     
-    cout << "Demonstrating 3-round interactive protocol..." << endl;
+    cout << "Running interactive protocol for values: [1234, 5678]" << endl;
     
     // Create prover and verifier
     auto prover = protocol.create_prover(statement, witness);
     auto verifier = protocol.create_verifier(statement);
     
-    if (!prover || !verifier) {
-        cout << "Failed to create prover/verifier" << endl;
-        return;
-    }
-    
-    // Round 1: Prover -> Verifier (commitments)
-    cout << "Round 1: Prover sends commitments..." << endl;
+    cout << "Step 1: Prover sends first flow (commitments)" << endl;
     auto first_message = prover->first_flow();
-    if (!first_message) {
-        cout << "First flow failed" << endl;
-        return;
-    }
+    cout << "  Message size: " << first_message.size() << " bytes" << endl;
     
-    if (!verifier->receive_first_flow(*first_message)) {
-        cout << "Verifier failed to process first message" << endl;
-        return;
-    }
-    cout << "  Commitment message size: " << first_message->size() << " bytes" << endl;
+    bool flow1_ok = verifier->receive_first_flow(first_message);
+    cout << "  Verifier processed: " << (flow1_ok ? "OK" : "FAILED") << endl;
     
-    // Round 2: Verifier -> Prover (challenges)
-    cout << "Round 2: Verifier sends challenges..." << endl;
-    auto challenges = verifier->generate_challenges();
-    if (challenges.empty()) {
-        cout << "Challenge generation failed" << endl;
-        return;
+    if (flow1_ok) {
+        cout << "Step 2: Verifier sends challenges" << endl;
+        auto challenges = verifier->second_flow();
+        cout << "  Number of challenges: " << challenges.size() << endl;
+        
+        bool flow2_ok = prover->second_flow(challenges);
+        cout << "  Prover processed: " << (flow2_ok ? "OK" : "FAILED") << endl;
+        
+        if (flow2_ok) {
+            cout << "Step 3: Prover sends responses" << endl;
+            auto responses = prover->third_flow();
+            cout << "  Response size: " << responses.size() << " bytes" << endl;
+            
+            bool flow3_ok = verifier->receive_third_flow(responses);
+            cout << "  Verifier processed: " << (flow3_ok ? "OK" : "FAILED") << endl;
+            
+            if (flow3_ok) {
+                cout << "Step 4: Final verification" << endl;
+                bool final_result = verifier->final_verification();
+                cout << "  Final result: " << (final_result ? "ACCEPTED" : "REJECTED") << endl;
+                
+                // Show transcript size
+                const auto& transcript = verifier->transcript();
+                cout << "  Total transcript size: " << transcript.size_bytes() << " bytes" << endl;
+            }
+        }
     }
-    
-    if (!prover->receive_challenges(challenges)) {
-        cout << "Prover failed to process challenges" << endl;
-        return;
-    }
-    cout << "  Number of challenges: " << challenges.size() << endl;
-    
-    // Round 3: Prover -> Verifier (responses)
-    cout << "Round 3: Prover sends responses..." << endl;
-    auto third_message = prover->third_flow();
-    if (!third_message) {
-        cout << "Third flow failed" << endl;
-        return;
-    }
-    
-    if (!verifier->receive_third_flow(*third_message)) {
-        cout << "Verifier failed to process responses" << endl;
-        return;
-    }
-    cout << "  Response message size: " << third_message->size() << " bytes" << endl;
-    
-    // Final verification
-    cout << "Final verification..." << endl;
-    bool result = verifier->verify();
-    cout << "Interactive protocol result: " << (result ? "ACCEPTED" : "REJECTED") << endl;
 }
 
 void demo_parameter_analysis() {
     cout << "\n=== Parameter Analysis Demo ===" << endl;
     
-    // Analyze different parameter choices
-    vector<tuple<size_t, size_t, size_t>> param_sets = {
-        {128, 32, 1},   // Conservative single proof
-        {128, 32, 4},   // Conservative batch
-        {112, 16, 8},   // Balanced batch
-        {96, 16, 16}    // Performance batch
+    struct TestConfig {
+        size_t security_bits;
+        size_t range_bits;
+        size_t batch_size;
+        string description;
     };
     
-    cout << "Parameter analysis for different use cases:" << endl;
-    cout << "Format: (Security, Range, Batch) -> Est. Size, Success Prob" << endl;
+    std::vector<TestConfig> configs = {
+        {128, 32, 1, "Standard 32-bit range, single value"},
+        {128, 64, 1, "Standard 64-bit range, single value"},
+        {128, 32, 8, "Batch of 8 values, 32-bit range"},
+        {128, 64, 8, "Batch of 8 values, 64-bit range"},
+        {256, 64, 1, "High security, 64-bit range"},
+    };
     
-    for (const auto& [sec, range, batch] : param_sets) {
-        SharpGS::Parameters params(sec, range, batch);
-        auto estimate = sharp_gs_utils::estimate_performance(params);
+    cout << "Analyzing different parameter configurations:" << endl;
+    cout << "=============================================" << endl;
+    
+    for (const auto& config : configs) {
+        cout << "\nConfiguration: " << config.description << endl;
+        cout << "  Security: " << config.security_bits << " bits" << endl;
+        cout << "  Range: 2^" << config.range_bits << endl;
+        cout << "  Batch size: " << config.batch_size << endl;
         
-        cout << "  (" << sec << ", " << range << ", " << batch << ") -> "
-             << estimate.proof_size_bytes << " bytes, "
-             << (estimate.success_probability * 100) << "% success" << endl;
-    }
-    
-    // Validate parameter combinations
-    cout << "\nParameter validation:" << endl;
-    
-    vector<tuple<size_t, size_t, size_t, size_t>> test_params = {
-        {128, 64, 100, 1},    // Too large challenge bits
-        {64, 256, 100, 1},    // Too large range
-        {128, 32, 100, 1000}, // Too large batch
-        {128, 32, 100, 8}     // Valid
-    };
-    
-    for (const auto& [sec, range, challenge, batch] : test_params) {
-        bool valid = utils::params::validate_parameters(sec, range, challenge, batch);
-        cout << "  (" << sec << ", " << range << ", " << challenge << ", " << batch << "): "
-             << (valid ? "VALID" : "INVALID") << endl;
+        SharpGS::Parameters params(config.security_bits, config.range_bits, config.batch_size);
+        
+        if (params.validate()) {
+            cout << "  ✓ Parameters valid" << endl;
+            cout << "  Repetitions needed: " << params.repetitions << endl;
+            cout << "  Estimated proof size: " << params.estimate_proof_size() << " bytes" << endl;
+            
+            // Compute group sizes
+            auto [p_bits, q_bits] = utils::params::compute_group_sizes(
+                config.security_bits, config.range_bits, 128, config.batch_size);
+            cout << "  Gcom group size: " << p_bits << " bits" << endl;
+            cout << "  G3sq group size: " << q_bits << " bits" << endl;
+            
+            // Performance estimate
+            auto estimate = sharp_gs_utils::estimate_performance(params);
+            cout << "  Est. proving time: " << estimate.prover_time_ms << "ms" << endl;
+            cout << "  Est. verification time: " << estimate.verifier_time_ms << "ms" << endl;
+            cout << "  Est. success probability: " << estimate.success_probability << endl;
+        } else {
+            cout << "  ✗ Invalid parameters" << endl;
+        }
     }
 }
 

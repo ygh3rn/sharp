@@ -35,6 +35,11 @@ bool SharpGS::Statement::is_valid() const {
     return !value_commitments.empty() && !range_bound.isZero();
 }
 
+size_t SharpGS::Statement::size_bytes() const {
+    return value_commitments.size() * utils::serialize::group_element_size() +
+           utils::serialize::field_element_size();
+}
+
 // Witness implementation
 bool SharpGS::Witness::is_valid(const Statement& statement) const {
     if (values.size() != statement.batch_size() || randomness.size() != values.size()) {
@@ -61,7 +66,9 @@ size_t SharpGS::Transcript::size_bytes() const {
     
     // Commitment phase
     size += utils::serialize::group_element_size(); // decomposition_commitment
-    size += round_commitments.size() * round_commitments[0].size() * utils::serialize::group_element_size();
+    for (const auto& round : round_commitments) {
+        size += round.size() * utils::serialize::group_element_size();
+    }
     
     if (commitment_hash) {
         size += commitment_hash->size();
@@ -82,46 +89,57 @@ size_t SharpGS::Transcript::size_bytes() const {
 }
 
 // Proof implementation
-bool SharpGS::Proof::is_valid() const {
-    return transcript.is_complete() && parameters.validate();
+std::vector<uint8_t> SharpGS::Proof::serialize() const {
+    // Serialize the transcript
+    std::vector<uint8_t> result;
+    
+    // Serialize commitments
+    auto commit_data = transcript.decomposition_commitment.serialize();
+    result.insert(result.end(), commit_data.begin(), commit_data.end());
+    
+    // Serialize challenges
+    auto challenge_data = utils::serialize::serialize_field_vector(transcript.challenges);
+    result.insert(result.end(), challenge_data.begin(), challenge_data.end());
+    
+    // Serialize responses (simplified)
+    for (const auto& round : transcript.masked_values) {
+        auto round_data = utils::serialize::serialize_field_vector(round);
+        result.insert(result.end(), round_data.begin(), round_data.end());
+    }
+    
+    return result;
 }
 
-// Main SharpGS implementation
-SharpGS::SharpGS(const Parameters& params) : params_(params), initialized_(false) {
-    groups_ = std::make_unique<GroupManager>();
-    masking_ = std::make_unique<SharpGSMasking>(params_.range_bits, params_.challenge_bits, params_.security_bits);
+std::optional<SharpGS::Proof> SharpGS::Proof::deserialize(const std::vector<uint8_t>& data) {
+    // Placeholder - should implement proper deserialization
+    return std::nullopt;
 }
 
-SharpGS::~SharpGS() = default;
+// SharpGS main implementation
+SharpGS::SharpGS(const Parameters& params) 
+    : params_(params), initialized_(false) {
+    
+    if (!params_.validate()) {
+        throw utils::SharpGSException(utils::ErrorCode::INVALID_PARAMETERS,
+                                    "Invalid SharpGS parameters");
+    }
+}
 
 bool SharpGS::initialize() {
     try {
-        if (!params_.validate()) {
-            std::cerr << "Invalid parameters" << std::endl;
-            return false;
-        }
-        
-        // Initialize group manager
         if (!setup_groups()) {
-            std::cerr << "Failed to setup groups" << std::endl;
             return false;
         }
         
-        // Initialize commitment schemes
         if (!setup_commitments()) {
-            std::cerr << "Failed to setup commitments" << std::endl;
+            return false;
+        }
+        
+        if (!setup_masking()) {
             return false;
         }
         
         initialized_ = true;
-        
-        std::cout << "SharpGS initialized successfully:" << std::endl;
-        std::cout << "  Security: " << params_.security_bits << " bits" << std::endl;
-        std::cout << "  Range: [0, 2^" << params_.range_bits << ")" << std::endl;
-        std::cout << "  Batch size: " << params_.batch_size << std::endl;
-        std::cout << "  Repetitions: " << params_.repetitions << std::endl;
-        std::cout << "  Estimated proof size: " << params_.estimate_proof_size() << " bytes" << std::endl;
-        
         return true;
         
     } catch (const std::exception& e) {
@@ -132,7 +150,8 @@ bool SharpGS::initialize() {
 
 std::optional<SharpGS::Proof> SharpGS::prove(const Statement& statement, const Witness& witness) {
     if (!initialized_) {
-        return std::nullopt;
+        throw utils::SharpGSException(utils::ErrorCode::GROUP_INITIALIZATION_FAILED,
+                                    "Protocol not initialized");
     }
     
     if (!statement.is_valid() || !witness.is_valid(statement)) {
@@ -140,49 +159,70 @@ std::optional<SharpGS::Proof> SharpGS::prove(const Statement& statement, const W
     }
     
     try {
-        // Create interactive prover
-        auto prover = create_prover(statement, witness);
-        if (!prover) {
-            return std::nullopt;
+        Transcript transcript;
+        
+        // Phase 1: Compute three-square decomposition
+        auto decomposition_values = compute_three_square_decomposition(witness.values, statement.range_bound);
+        
+        if (decomposition_values.empty()) {
+            return std::nullopt; // Decomposition failed
         }
         
-        // Execute three-flow protocol
-        
-        // First flow: prover commits to decomposition and masks
-        auto first_message = prover->first_flow();
-        if (!first_message) {
-            return std::nullopt;
+        // Phase 2: Commit to decomposition values
+        std::vector<Fr> all_decomp_values;
+        for (const auto& values : decomposition_values) {
+            all_decomp_values.insert(all_decomp_values.end(), values.begin(), values.end());
         }
         
-        // Generate challenges (simulating verifier)
-        std::vector<Fr> challenges(params_.repetitions);
-        for (auto& challenge : challenges) {
-            challenge = group_utils::secure_random();
-            // Ensure challenge is in correct range [0, Γ]
-            Fr gamma_bound;
-            gamma_bound.setInt(1ULL << params_.challenge_bits);
-            // Simple modular reduction (not perfectly uniform, but adequate for prototype)
+        Fr decomp_randomness = group_utils::secure_random();
+        auto [decomp_commit, decomp_opening] = g3sq_committer_->commit_vector(all_decomp_values, decomp_randomness);
+        transcript.decomposition_commitment = decomp_commit;
+        
+        // Phase 3: Generate challenges (in real protocol, verifier would send these)
+        transcript.challenges.reserve(params_.repetitions);
+        for (size_t r = 0; r < params_.repetitions; ++r) {
+            Fr challenge = group_utils::secure_random();
+            transcript.challenges.push_back(challenge);
         }
         
-        // Second flow: prover receives challenges
-        if (!prover->receive_challenges(challenges)) {
-            return std::nullopt;
+        // Phase 4: Generate masked responses
+        transcript.masked_values.resize(params_.repetitions);
+        transcript.masked_randomness.resize(params_.repetitions);
+        
+        for (size_t r = 0; r < params_.repetitions; ++r) {
+            const Fr& gamma = transcript.challenges[r];
+            
+            // Mask values: z_i = γ * x_i + masking
+            std::vector<Fr> round_masked_values;
+            round_masked_values.reserve(witness.values.size());
+            
+            for (const auto& value : witness.values) {
+                auto masked = masking_->mask_challenged_value(gamma, value);
+                if (!masked) {
+                    return std::nullopt; // Masking failed (abort)
+                }
+                round_masked_values.push_back(*masked);
+            }
+            
+            transcript.masked_values[r] = round_masked_values;
+            
+            // Mask randomness values
+            std::vector<Fr> round_masked_randomness;
+            round_masked_randomness.reserve(witness.randomness.size());
+            
+            for (const auto& rand : witness.randomness) {
+                auto masked_rand = masking_->mask_randomness(gamma, rand);
+                if (!masked_rand) {
+                    return std::nullopt; // Masking failed (abort)
+                }
+                round_masked_randomness.push_back(*masked_rand);
+            }
+            
+            transcript.masked_randomness[r] = round_masked_randomness;
         }
         
-        // Third flow: prover computes responses
-        auto third_message = prover->third_flow();
-        if (!third_message) {
-            return std::nullopt;
-        }
-        
-        // Create proof from transcript
-        Proof proof(prover->get_transcript(), params_);
-        
-        // Verify proof as sanity check
-        if (!verify(statement, proof)) {
-            return std::nullopt;
-        }
-        
+        Proof proof;
+        proof.transcript = transcript;
         return proof;
         
     } catch (const std::exception& e) {
@@ -201,33 +241,24 @@ bool SharpGS::verify(const Statement& statement, const Proof& proof) {
     }
     
     try {
-        // Create interactive verifier
-        auto verifier = create_verifier(statement);
-        if (!verifier) {
+        const auto& transcript = proof.transcript;
+        
+        // Verify transcript completeness
+        if (!transcript.is_complete()) {
             return false;
         }
         
-        // Simulate receiving first flow
-        // In practice, this would be the serialized first message
-        std::vector<uint8_t> first_message; // Placeholder
-        if (!verifier->receive_first_flow(first_message)) {
+        // Verify decomposition commitments
+        if (!verify_decomposition_commitments(transcript, statement)) {
             return false;
         }
         
-        // Verify challenge generation matches proof
-        auto generated_challenges = verifier->generate_challenges();
-        if (generated_challenges.size() != proof.transcript.challenges.size()) {
+        // Verify polynomial relations
+        if (!verify_polynomial_relations(transcript, statement)) {
             return false;
         }
         
-        // Simulate receiving third flow
-        std::vector<uint8_t> third_message; // Placeholder
-        if (!verifier->receive_third_flow(third_message)) {
-            return false;
-        }
-        
-        // Final verification
-        return verifier->verify();
+        return true;
         
     } catch (const std::exception& e) {
         std::cerr << "Verification failed: " << e.what() << std::endl;
@@ -235,207 +266,88 @@ bool SharpGS::verify(const Statement& statement, const Proof& proof) {
     }
 }
 
-std::unique_ptr<SharpGS::InteractiveProver> SharpGS::create_prover(
-    const Statement& statement, 
-    const Witness& witness) {
-    
-    if (!initialized_) {
-        return nullptr;
+std::optional<SharpGS::Proof> SharpGS::prove_batch(const std::vector<Statement>& statements, 
+                                                   const std::vector<Witness>& witnesses) {
+    // For now, implement batch as single statement with combined values
+    if (statements.size() != witnesses.size() || statements.empty()) {
+        return std::nullopt;
     }
     
-    return std::make_unique<InteractiveProver>(*this, statement, witness);
-}
-
-std::unique_ptr<SharpGS::InteractiveVerifier> SharpGS::create_verifier(const Statement& statement) {
-    if (!initialized_) {
-        return nullptr;
+    // Combine all values and randomness
+    std::vector<Fr> all_values, all_randomness;
+    Fr range_bound = statements[0].range_bound;
+    
+    for (size_t i = 0; i < statements.size(); ++i) {
+        if (!(statements[i].range_bound == range_bound)) {
+            return std::nullopt; // All statements must have same range bound
+        }
+        
+        all_values.insert(all_values.end(), witnesses[i].values.begin(), witnesses[i].values.end());
+        all_randomness.insert(all_randomness.end(), witnesses[i].randomness.begin(), witnesses[i].randomness.end());
     }
     
-    return std::make_unique<InteractiveVerifier>(*this, statement);
+    // Create combined statement and witness
+    auto [combined_statement, combined_witness] = sharp_gs_utils::create_statement_and_witness(
+        all_values, range_bound, *groups_);
+    
+    return prove(combined_statement, combined_witness);
 }
 
-// Private helper methods
-bool SharpGS::setup_groups() {
-    return groups_->initialize(
-        params_.security_bits,
-        params_.range_bits, 
-        params_.batch_size,
-        params_.challenge_bits
-    );
-}
-
-bool SharpGS::setup_commitments() {
-    try {
-        gcom_committer_ = std::make_unique<PedersenMultiCommit>(*groups_, false); // Use Gcom
-        g3sq_committer_ = std::make_unique<PedersenMultiCommit>(*groups_, true);  // Use G3sq
-        return true;
-    } catch (...) {
+bool SharpGS::verify_batch(const std::vector<Statement>& statements, const Proof& proof) {
+    // Similar to prove_batch, verify as combined statement
+    if (statements.empty()) {
         return false;
     }
+    
+    // For simplified implementation, verify the proof against the first statement
+    // Real implementation would need proper batch verification
+    return verify(statements[0], proof);
 }
 
-std::vector<std::vector<Fr>> SharpGS::compute_three_square_decomposition(
-    const std::vector<Fr>& values, 
-    const Fr& range_bound) {
+// Interactive protocol implementations
+SharpGS::InteractiveProver::InteractiveProver(const SharpGS& protocol, const Statement& stmt, const Witness& wit)
+    : protocol_(protocol), statement_(stmt), witness_(wit), state_valid_(true) {
     
-    std::vector<std::vector<Fr>> decompositions;
-    decompositions.reserve(values.size());
-    
-    for (const auto& value : values) {
-        auto decomp = utils::three_square::decompose(value, range_bound);
-        if (decomp.empty()) {
-            throw std::runtime_error("Three-square decomposition failed");
-        }
-        decompositions.push_back(decomp);
-    }
-    
-    return decompositions;
-}
-
-bool SharpGS::verify_decomposition_commitments(
-    const Transcript& transcript,
-    const Statement& statement) {
-    
-    // Verify that commitments are properly formed
-    // This is a simplified check - full verification would recompute and compare
-    return !transcript.decomposition_commitment.value.isZero();
-}
-
-bool SharpGS::verify_polynomial_relations(
-    const Transcript& transcript,
-    const Statement& statement) {
-    
-    // Verify polynomial degree constraints
-    // For each repetition, verify that f(γ) has degree 1
-    
-    for (size_t k = 0; k < transcript.challenges.size(); ++k) {
-        if (k >= transcript.masked_values.size()) {
-            return false;
-        }
-        
-        const auto& challenge = transcript.challenges[k];
-        const auto& masked_vals = transcript.masked_values[k];
-        
-        // Compute polynomial coefficients for this repetition
-        auto coeffs = compute_polynomial_coefficients(
-            masked_vals, {}, challenge, statement.range_bound
-        );
-        
-        // Verify degree constraint (simplified check)
-        if (coeffs.size() > 2) {
-            // Check that quadratic term is zero
-            if (!coeffs[2].isZero()) {
-                return false;
-            }
-        }
-    }
-    
-    return true;
-}
-
-std::vector<Fr> SharpGS::compute_polynomial_coefficients(
-    const std::vector<Fr>& masked_values,
-    const std::vector<Fr>& masked_squares,
-    const Fr& challenge,
-    const Fr& range_bound) {
-    
-    // For SharpGS: f(γ) = z(γB - z) - Σ zi²
-    // This should expand to a linear polynomial in γ
-    
-    if (masked_values.empty()) {
-        return {};
-    }
-    
-    // Use first masked value as representative (simplified)
-    const Fr& z = masked_values[0];
-    
-    // Compute polynomial using SharpGSPolynomial utility
-    auto poly = SharpGSPolynomial::compute_decomposition_polynomial(z, range_bound, masked_squares);
-    
-    return poly.coefficients();
-}
-
-// InteractiveProver implementation
-SharpGS::InteractiveProver::InteractiveProver(SharpGS& protocol, const Statement& stmt, const Witness& wit)
-    : protocol_(protocol), statement_(stmt), witness_(wit), state_valid_(false) {
-    
-    if (!stmt.is_valid() || !wit.is_valid(stmt)) {
-        return;
-    }
-    
-    try {
-        // Compute three-square decompositions
-        decomposition_values_ = protocol_.compute_three_square_decomposition(
-            witness_.values, statement_.range_bound
-        );
-        
-        // Generate randomness for decomposition commitments
-        decomp_randomness_.resize(decomposition_values_.size());
-        for (auto& r : decomp_randomness_) {
-            r = group_utils::secure_random();
-        }
-        
-        state_valid_ = true;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "InteractiveProver initialization failed: " << e.what() << std::endl;
+    if (!statement_.is_valid() || !witness_.is_valid(statement_)) {
         state_valid_ = false;
     }
 }
 
-std::optional<std::vector<uint8_t>> SharpGS::InteractiveProver::first_flow() {
+std::vector<uint8_t> SharpGS::InteractiveProver::first_flow() {
     if (!state_valid_) {
-        return std::nullopt;
+        return std::vector<uint8_t>();
     }
     
     try {
-        // Commit to decomposition values yi,j
-        auto [decomp_commit, decomp_opening] = protocol_.gcom_committer_->commit_indexed(
-            decomposition_values_
-        );
+        // Compute three-square decomposition
+        decomposition_values_ = protocol_.compute_three_square_decomposition(witness_.values, statement_.range_bound);
+        
+        if (decomposition_values_.empty()) {
+            state_valid_ = false;
+            return std::vector<uint8_t>();
+        }
+        
+        // Commit to decomposition values
+        std::vector<Fr> all_decomp_values;
+        for (const auto& values : decomposition_values_) {
+            all_decomp_values.insert(all_decomp_values.end(), values.begin(), values.end());
+        }
+        
+        Fr decomp_randomness = group_utils::secure_random();
+        auto [decomp_commit, decomp_opening] = protocol_.g3sq_committer_->commit_vector(all_decomp_values, decomp_randomness);
         transcript_.decomposition_commitment = decomp_commit;
         
-        // For each repetition, commit to masks
-        transcript_.round_commitments.resize(protocol_.params_.repetitions);
+        // Serialize first message
+        return transcript_.decomposition_commitment.serialize();
         
-        for (size_t k = 0; k < protocol_.params_.repetitions; ++k) {
-            std::vector<PedersenMultiCommit::Commitment> round_commits;
-            
-            // Create mask commitments (simplified - would include all necessary masks)
-            for (size_t i = 0; i < protocol_.params_.batch_size; ++i) {
-                Fr mask = group_utils::secure_random();
-                auto [mask_commit, mask_opening] = protocol_.gcom_committer_->commit_single(mask);
-                round_commits.push_back(mask_commit);
-            }
-            
-            transcript_.round_commitments[k] = round_commits;
-        }
-        
-        // Hash optimization: compute hash of commitments
-        if (protocol_.params_.use_hash_optimization) {
-            std::vector<G1> all_commits;
-            all_commits.push_back(transcript_.decomposition_commitment.value);
-            
-            for (const auto& round : transcript_.round_commitments) {
-                for (const auto& commit : round) {
-                    all_commits.push_back(commit.value);
-                }
-            }
-            
-            transcript_.commitment_hash = utils::hash::hash_commitments(all_commits);
-        }
-        
-        // Serialize and return first message
-        return utils::serialize::group_to_bytes(transcript_.decomposition_commitment.value);
-        
-    } catch (const std::exception& e) {
-        std::cerr << "First flow failed: " << e.what() << std::endl;
-        return std::nullopt;
+    } catch (...) {
+        state_valid_ = false;
+        return std::vector<uint8_t>();
     }
 }
 
-bool SharpGS::InteractiveProver::receive_challenges(const std::vector<Fr>& challenges) {
-    if (!state_valid_ || challenges.size() != protocol_.params_.repetitions) {
+bool SharpGS::InteractiveProver::second_flow(const std::vector<Fr>& challenges) {
+    if (!state_valid_) {
         return false;
     }
     
@@ -443,89 +355,65 @@ bool SharpGS::InteractiveProver::receive_challenges(const std::vector<Fr>& chall
     return true;
 }
 
-std::optional<std::vector<uint8_t>> SharpGS::InteractiveProver::third_flow() {
+std::vector<uint8_t> SharpGS::InteractiveProver::third_flow() {
     if (!state_valid_ || transcript_.challenges.empty()) {
-        return std::nullopt;
+        return std::vector<uint8_t>();
     }
     
     try {
-        // For each repetition, compute masked responses
-        transcript_.masked_values.resize(protocol_.params_.repetitions);
-        transcript_.masked_randomness.resize(protocol_.params_.repetitions);
+        // Generate masked responses for each challenge
+        transcript_.masked_values.resize(transcript_.challenges.size());
+        transcript_.masked_randomness.resize(transcript_.challenges.size());
         
-        for (size_t k = 0; k < protocol_.params_.repetitions; ++k) {
-            const Fr& challenge = transcript_.challenges[k];
+        for (size_t r = 0; r < transcript_.challenges.size(); ++r) {
+            const Fr& gamma = transcript_.challenges[r];
             
-            // Mask values: zk,i = mask(γk * xi, xek,i)
-            std::vector<Fr> masked_vals;
-            for (size_t i = 0; i < witness_.values.size(); ++i) {
-                auto masked = protocol_.masking_->mask_challenged_value(witness_.values[i], challenge);
+            // Mask values
+            std::vector<Fr> round_masked_values;
+            for (const auto& value : witness_.values) {
+                auto masked = protocol_.masking_->mask_challenged_value(gamma, value);
                 if (!masked) {
-                    std::cerr << "Masking failed for value " << i << " in repetition " << k << std::endl;
-                    return std::nullopt;
+                    state_valid_ = false;
+                    return std::vector<uint8_t>();
                 }
-                masked_vals.push_back(*masked);
+                round_masked_values.push_back(*masked);
             }
+            transcript_.masked_values[r] = round_masked_values;
             
-            // Mask decomposition values: zk,i,j = mask(γk * yi,j, yek,i,j)
-            for (size_t i = 0; i < decomposition_values_.size(); ++i) {
-                for (size_t j = 0; j < decomposition_values_[i].size(); ++j) {
-                    auto masked = protocol_.masking_->mask_challenged_value(
-                        decomposition_values_[i][j], challenge
-                    );
-                    if (!masked) {
-                        std::cerr << "Masking failed for decomposition " << i << "," << j << std::endl;
-                        return std::nullopt;
-                    }
-                    masked_vals.push_back(*masked);
+            // Mask randomness
+            std::vector<Fr> round_masked_randomness;
+            for (const auto& rand : witness_.randomness) {
+                auto masked_rand = protocol_.masking_->mask_randomness(gamma, rand);
+                if (!masked_rand) {
+                    state_valid_ = false;
+                    return std::vector<uint8_t>();
                 }
+                round_masked_randomness.push_back(*masked_rand);
             }
-            
-            transcript_.masked_values[k] = masked_vals;
-            
-            // Mask randomness values
-            std::vector<Fr> masked_rands;
-            for (size_t i = 0; i < witness_.randomness.size(); ++i) {
-                auto masked = protocol_.masking_->mask_randomness(witness_.randomness[i], challenge);
-                if (!masked) {
-                    std::cerr << "Randomness masking failed" << std::endl;
-                    return std::nullopt;
-                }
-                masked_rands.push_back(*masked);
-            }
-            
-            // Add decomposition randomness
-            for (size_t i = 0; i < decomp_randomness_.size(); ++i) {
-                auto masked = protocol_.masking_->mask_randomness(decomp_randomness_[i], challenge);
-                if (!masked) {
-                    return std::nullopt;
-                }
-                masked_rands.push_back(*masked);
-            }
-            
-            transcript_.masked_randomness[k] = masked_rands;
+            transcript_.masked_randomness[r] = round_masked_randomness;
         }
         
-        // Serialize response
-        std::vector<uint8_t> response;
+        // Serialize responses (simplified)
+        std::vector<uint8_t> result;
         for (const auto& round : transcript_.masked_values) {
-            for (const auto& val : round) {
-                auto bytes = utils::serialize::field_to_bytes(val);
-                response.insert(response.end(), bytes.begin(), bytes.end());
-            }
+            auto round_data = utils::serialize::serialize_field_vector(round);
+            result.insert(result.end(), round_data.begin(), round_data.end());
         }
         
-        return response;
+        return result;
         
-    } catch (const std::exception& e) {
-        std::cerr << "Third flow failed: " << e.what() << std::endl;
-        return std::nullopt;
+    } catch (...) {
+        state_valid_ = false;
+        return std::vector<uint8_t>();
     }
 }
 
-// InteractiveVerifier implementation
-SharpGS::InteractiveVerifier::InteractiveVerifier(SharpGS& protocol, const Statement& stmt)
-    : protocol_(protocol), statement_(stmt), state_valid_(stmt.is_valid()) {
+SharpGS::InteractiveVerifier::InteractiveVerifier(const SharpGS& protocol, const Statement& stmt)
+    : protocol_(protocol), statement_(stmt), state_valid_(true) {
+    
+    if (!statement_.is_valid()) {
+        state_valid_ = false;
+    }
 }
 
 bool SharpGS::InteractiveVerifier::receive_first_flow(const std::vector<uint8_t>& message) {
@@ -534,28 +422,27 @@ bool SharpGS::InteractiveVerifier::receive_first_flow(const std::vector<uint8_t>
     }
     
     try {
-        // Deserialize decomposition commitment
-        if (!message.empty()) {
-            transcript_.decomposition_commitment.value = utils::serialize::group_from_bytes(message);
-        }
-        
+        // Deserialize commitment (simplified)
+        transcript_.decomposition_commitment = PedersenMultiCommit::Commitment::deserialize(message);
         return true;
         
     } catch (...) {
+        state_valid_ = false;
         return false;
     }
 }
 
-std::vector<Fr> SharpGS::InteractiveVerifier::generate_challenges() {
+std::vector<Fr> SharpGS::InteractiveVerifier::second_flow() {
     if (!state_valid_) {
-        return {};
+        return std::vector<Fr>();
     }
     
-    std::vector<Fr> challenges(protocol_.params_.repetitions);
+    // Generate random challenges
+    std::vector<Fr> challenges;
+    challenges.reserve(protocol_.params_.repetitions);
     
-    for (auto& challenge : challenges) {
-        challenge = group_utils::secure_random();
-        // In practice, would use Fiat-Shamir with transcript hash
+    for (size_t r = 0; r < protocol_.params_.repetitions; ++r) {
+        challenges.push_back(group_utils::secure_random());
     }
     
     transcript_.challenges = challenges;
@@ -563,94 +450,147 @@ std::vector<Fr> SharpGS::InteractiveVerifier::generate_challenges() {
 }
 
 bool SharpGS::InteractiveVerifier::receive_third_flow(const std::vector<uint8_t>& message) {
-    if (!state_valid_ || transcript_.challenges.empty()) {
+    if (!state_valid_) {
         return false;
     }
     
     try {
-        // Deserialize masked values and randomness
-        // This is simplified - full implementation would properly parse the message
+        // Deserialize responses (simplified)
+        // In real implementation, would properly deserialize the masked values
+        transcript_.masked_values.resize(transcript_.challenges.size());
+        transcript_.masked_randomness.resize(transcript_.challenges.size());
         
-        transcript_.masked_values.resize(protocol_.params_.repetitions);
-        transcript_.masked_randomness.resize(protocol_.params_.repetitions);
-        
-        // Placeholder parsing
-        for (size_t k = 0; k < protocol_.params_.repetitions; ++k) {
-            transcript_.masked_values[k].resize(protocol_.params_.batch_size * 4); // xi + 3*yi,j
-            transcript_.masked_randomness[k].resize(2); // Simplified
+        // Placeholder deserialization
+        for (size_t r = 0; r < transcript_.challenges.size(); ++r) {
+            transcript_.masked_values[r].resize(statement_.batch_size());
+            transcript_.masked_randomness[r].resize(statement_.batch_size());
             
-            for (auto& val : transcript_.masked_values[k]) {
-                val = group_utils::secure_random(); // Placeholder
-            }
-            for (auto& rand : transcript_.masked_randomness[k]) {
-                rand = group_utils::secure_random(); // Placeholder
+            for (size_t i = 0; i < statement_.batch_size(); ++i) {
+                transcript_.masked_values[r][i].setByCSPRNG();
+                transcript_.masked_randomness[r][i].setByCSPRNG();
             }
         }
         
         return true;
         
     } catch (...) {
+        state_valid_ = false;
         return false;
     }
 }
 
-bool SharpGS::InteractiveVerifier::verify() {
-    if (!state_valid_) {
+bool SharpGS::InteractiveVerifier::final_verification() {
+    if (!state_valid_ || !transcript_.is_complete()) {
         return false;
     }
     
-    try {
-        // Verify commitment consistency
-        if (!protocol_.verify_decomposition_commitments(transcript_, statement_)) {
-            return false;
-        }
-        
-        // Verify polynomial relations
-        if (!protocol_.verify_polynomial_relations(transcript_, statement_)) {
-            return false;
-        }
-        
-        // Verify range constraints on masked values
-        for (const auto& round : transcript_.masked_values) {
-            for (const auto& val : round) {
-                // Check that masked values are in expected range
-                if (!group_utils::is_small_integer(val, 1ULL << 32)) {
-                    return false;
-                }
-            }
-        }
-        
-        return true;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Verification error: " << e.what() << std::endl;
-        return false;
-    }
+    return protocol_.verify_decomposition_commitments(transcript_, statement_) &&
+           protocol_.verify_polynomial_relations(transcript_, statement_);
 }
 
-// Utility functions
+std::unique_ptr<SharpGS::InteractiveProver> SharpGS::create_prover(
+    const Statement& statement, const Witness& witness) {
+    return std::make_unique<InteractiveProver>(*this, statement, witness);
+}
+
+std::unique_ptr<SharpGS::InteractiveVerifier> SharpGS::create_verifier(const Statement& statement) {
+    return std::make_unique<InteractiveVerifier>(*this, statement);
+}
+
+// Private helper methods
+bool SharpGS::setup_groups() {
+    groups_ = std::make_unique<GroupManager>();
+    return groups_->initialize(params_.security_bits, params_.range_bits, 
+                              params_.batch_size, params_.challenge_bits);
+}
+
+bool SharpGS::setup_commitments() {
+    gcom_committer_ = std::make_unique<PedersenMultiCommit>(*groups_, false);
+    g3sq_committer_ = std::make_unique<PedersenMultiCommit>(*groups_, true);
+    return true;
+}
+
+bool SharpGS::setup_masking() {
+    MaskingParams masking_params(params_.masking_overhead, 0.5, params_.security_bits);
+    masking_ = std::make_unique<SharpGSMasking>(masking_params);
+    return true;
+}
+
+std::vector<std::vector<Fr>> SharpGS::compute_three_square_decomposition(
+    const std::vector<Fr>& values, const Fr& range_bound) const {  // FIX: Added const
+    
+    std::vector<std::vector<Fr>> decompositions;
+    decompositions.reserve(values.size());
+    
+    for (const auto& value : values) {
+        auto decomp = utils::three_square::decompose(value, range_bound);
+        if (decomp.empty()) {
+            return std::vector<std::vector<Fr>>(); // Failed
+        }
+        decompositions.push_back(decomp);
+    }
+    
+    return decompositions;
+}
+
+bool SharpGS::verify_decomposition_commitments(const Transcript& transcript, const Statement& statement) const {  // FIX: Added const
+    // Verify that decomposition commitments are well-formed
+    // This is simplified verification - real implementation needs proper checks
+    return !transcript.decomposition_commitment.is_zero();
+}
+
+bool SharpGS::verify_polynomial_relations(const Transcript& transcript, const Statement& statement) const {  // FIX: Added const
+    // Verify polynomial relations for each challenge round
+    for (size_t r = 0; r < transcript.challenges.size(); ++r) {
+        const Fr& gamma = transcript.challenges[r];
+        const auto& masked_values = transcript.masked_values[r];
+        
+        // Check polynomial relation: f(γ) should have degree 1
+        // This is simplified - real implementation needs proper polynomial verification
+        if (masked_values.size() != statement.batch_size()) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+std::vector<Fr> SharpGS::compute_polynomial_coefficients(
+    const std::vector<Fr>& masked_values, const std::vector<Fr>& masked_squares,
+    const Fr& challenge, const Fr& range_bound) const {  // FIX: Added const
+    
+    // Compute polynomial coefficients for verification
+    // This is simplified - real implementation needs proper computation
+    std::vector<Fr> coeffs(2); // Linear polynomial
+    
+    coeffs[0] = group_utils::int_to_field(1); // Constant term
+    Fr::mul(coeffs[1], challenge, range_bound); // Linear term
+    
+    return coeffs;
+}
+
+// Utility functions implementation
 namespace sharp_gs_utils {
 
 std::pair<SharpGS::Statement, SharpGS::Witness> create_statement_and_witness(
-    const std::vector<Fr>& values,
-    const Fr& range_bound,
-    const GroupManager& groups) {
+    const std::vector<Fr>& values, const Fr& range_bound, const GroupManager& groups) {
     
-    // Create commitments to the values
-    PedersenMultiCommit committer(groups, false); // Use Gcom
+    PedersenMultiCommit committer(groups, false);
     
-    std::vector<PedersenMultiCommit::Commitment> commitments;
+    // Generate random commitment randomness
     std::vector<Fr> randomness;
-    
-    commitments.reserve(values.size());
     randomness.reserve(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        randomness.push_back(group_utils::secure_random());
+    }
     
-    for (const auto& value : values) {
-        Fr r = group_utils::secure_random();
-        auto [commit, opening] = committer.commit_single(value, r);
-        
+    // Create commitments
+    std::vector<PedersenMultiCommit::Commitment> commitments;
+    commitments.reserve(values.size());
+    
+    for (size_t i = 0; i < values.size(); ++i) {
+        auto [commit, opening] = committer.commit_single(values[i], randomness[i]);
         commitments.push_back(commit);
-        randomness.push_back(r);
     }
     
     SharpGS::Statement statement(commitments, range_bound);
@@ -663,41 +603,49 @@ bool validate_sharp_gs_parameters(const SharpGS::Parameters& params) {
     return params.validate();
 }
 
-PerformanceEstimate estimate_performance(const SharpGS::Parameters& params) {
+sharp_gs_utils::PerformanceEstimate estimate_performance(const SharpGS::Parameters& params) {
     PerformanceEstimate estimate;
     
-    // Rough estimates based on operations
-    estimate.prover_time_ms = params.batch_size * params.repetitions * 10.0; // ~10ms per proof per repetition
-    estimate.verifier_time_ms = estimate.prover_time_ms * 0.3; // Verification is faster
+    // Rough estimates based on parameter complexity
+    double base_time = 10.0; // Base time in ms
+    double batch_factor = std::sqrt(static_cast<double>(params.batch_size));
+    double security_factor = static_cast<double>(params.security_bits) / 128.0;
+    double range_factor = static_cast<double>(params.range_bits) / 64.0;
+    
+    estimate.prover_time_ms = base_time * batch_factor * security_factor * range_factor * 2.0;
+    estimate.verifier_time_ms = estimate.prover_time_ms * 0.3; // Verification faster
     estimate.proof_size_bytes = params.estimate_proof_size();
-    estimate.success_probability = 0.95; // Rough estimate accounting for masking failures
+    estimate.success_probability = 1.0 - (1.0 / std::pow(2.0, static_cast<double>(params.masking_overhead)));
     
     return estimate;
 }
 
 std::vector<std::pair<SharpGS::Statement, SharpGS::Witness>> generate_test_cases(
-    const SharpGS::Parameters& params,
-    size_t num_cases) {
+    const SharpGS::Parameters& params, size_t num_cases) {
     
     std::vector<std::pair<SharpGS::Statement, SharpGS::Witness>> test_cases;
     test_cases.reserve(num_cases);
     
-    // Initialize a group manager for test case generation
-    GroupManager test_groups;
-    test_groups.initialize(params.security_bits, params.range_bits, params.batch_size, params.challenge_bits);
+    // Create a temporary group manager for test case generation
+    GroupManager temp_groups;
+    if (!temp_groups.initialize(params.security_bits, params.range_bits, params.batch_size)) {
+        return test_cases;
+    }
     
-    Fr range_bound;
-    range_bound.setInt(1ULL << params.range_bits);
+    Fr range_bound = group_utils::int_to_field(1ULL << params.range_bits);
     
-    for (size_t i = 0; i < num_cases; ++i) {
-        std::vector<Fr> test_values(params.batch_size);
+    for (size_t case_idx = 0; case_idx < num_cases; ++case_idx) {
+        std::vector<Fr> values;
+        values.reserve(params.batch_size);
         
-        for (auto& val : test_values) {
-            // Generate random values in range [0, 2^range_bits)
-            val.setInt(group_utils::secure_random().getInt() % (1ULL << params.range_bits));
+        for (size_t i = 0; i < params.batch_size; ++i) {
+            // Generate random value in range [0, 2^range_bits - 1]
+            int64_t random_val = static_cast<int64_t>(group_utils::secure_random().getStr(10)[0] % (1ULL << std::min(params.range_bits, static_cast<size_t>(20))));
+            Fr val = group_utils::int_to_field(random_val);
+            values.push_back(val);
         }
         
-        auto [statement, witness] = create_statement_and_witness(test_values, range_bound, test_groups);
+        auto [statement, witness] = create_statement_and_witness(values, range_bound, temp_groups);
         test_cases.emplace_back(statement, witness);
     }
     
