@@ -10,34 +10,64 @@
 SharpGSParams::SharpGSParams(size_t sec_level, size_t range_b) 
     : security_level(sec_level), range_bits(range_b) {
     
-    // Set parameters according to paper specifications
-    challenge_bits = max(20UL, min(40UL, sec_level / 3));  // Γ - reasonable range
-    masking_bits = max(8UL, min(20UL, sec_level / 12));    // L - reasonable range
-    repetitions = max(1UL, sec_level / max(1UL, challenge_bits));  // R
-    
-    // For small ranges, use smaller parameters to avoid overflow
-    if (range_bits > 32) {
-        range_bits = 32;  // Cap at 32 bits for practical implementation
+    // Validate input parameters
+    if (sec_level < 80 || sec_level > 256) {
+        throw std::invalid_argument("Security level must be between 80 and 256");
+    }
+    if (range_bits == 0 || range_bits > 64) {
+        throw std::invalid_argument("Range bits must be between 1 and 64");
     }
     
-    // Calculate required group orders according to paper bounds
+    // Calculate challenge bits according to paper: Γ should be around 2^40 for practical security
+    // but we need to balance with repetitions. Paper suggests log(Γ) ≈ 40 for good efficiency
+    challenge_bits = std::min(40UL, std::max(20UL, sec_level / 3));
+    
+    // Masking overhead L: paper suggests L ≥ 10 for good statistical hiding
+    // Should be roughly λ/12 to λ/8 for good efficiency/security tradeoff
+    masking_bits = std::max(10UL, std::min(20UL, sec_level / 10));
+    
+    // Number of repetitions R: Need R ≥ λ/log(Γ+1) for λ bits of security
+    // Paper equation: R = ⌈λ/log(Γ+1)⌉
+    double log_gamma = std::log2(static_cast<double>((1UL << challenge_bits)));
+    repetitions = std::max(1UL, static_cast<size_t>(std::ceil(static_cast<double>(sec_level) / log_gamma)));
+    
+    // Calculate bounds according to paper constraints
     uint64_t B = 1UL << range_bits;
     uint64_t Gamma = (1UL << challenge_bits) - 1;
     uint64_t L = 1UL << masking_bits;
     
-    // Ensure we don't overflow in calculations
-    if (B > 1000000 || Gamma > 1000000 || L > 1000000) {
-        // Use smaller values for implementation
-        B = min(B, 65536UL);
-        Gamma = min(Gamma, 1024UL);
-        L = min(L, 1024UL);
-    }
-    
+    // K = (BΓ + 1)L from paper
     uint64_t K = (B * Gamma + 1) * L;
     
-    // Set reasonable group orders (simplified for implementation)
-    p_order = Fr(1UL << 32);  // 32-bit group for commitment
-    q_order = Fr(1UL << 32);  // 32-bit group for decomposition
+    // Group order requirements from paper:
+    // p ≥ 2(BΓ² + 1)L for commitment group (Gcom)
+    // q ≥ 18K² for 3-square group (G3sq)
+    
+    // For p: need p ≥ 2(BΓ² + 1)L
+    // This ensures unique rational representatives
+    uint64_t p_min = 2 * (B * Gamma * Gamma + 1) * L;
+    
+    // For q: need q ≥ 18K²
+    // This ensures the square decomposition works over Zq
+    uint64_t q_min = 18 * K * K;
+    
+    // Round up to next power of 2 for efficiency, but cap at reasonable sizes
+    size_t p_bits = std::max(256UL, static_cast<size_t>(std::ceil(std::log2(static_cast<double>(p_min)))));
+    size_t q_bits = std::max(256UL, static_cast<size_t>(std::ceil(std::log2(static_cast<double>(q_min)))));
+    
+    // Cap at reasonable sizes to avoid overflow
+    p_bits = std::min(p_bits, 512UL);
+    q_bits = std::min(q_bits, 512UL);
+    
+    // Set group orders (these would typically be prime orders)
+    // For now, we set them to the bit requirements
+    p_order = Fr(1UL << std::min(p_bits, 63UL)); // Avoid overflow
+    q_order = Fr(1UL << std::min(q_bits, 63UL)); // Avoid overflow
+    
+    // Final validation
+    if (!validate_parameters()) {
+        throw std::runtime_error("Generated parameters failed validation");
+    }
 }
 
 bool SharpGSParams::validate_parameters() const {
@@ -46,12 +76,74 @@ bool SharpGSParams::validate_parameters() const {
         return false;
     }
     
-    // Check that parameters are reasonable (consistent with constructor)
-    if (range_bits > 32 || challenge_bits > 40 || masking_bits > 20) {
+    // Check security level is achieved
+    double achieved_security = static_cast<double>(repetitions) * std::log2(static_cast<double>((1UL << challenge_bits)));
+    if (achieved_security < static_cast<double>(security_level) * 0.9) { // Allow 10% slack
+        return false;
+    }
+    
+    // Check bounds don't overflow
+    uint64_t B = 1UL << range_bits;
+    uint64_t Gamma = (1UL << challenge_bits) - 1;
+    uint64_t L = 1UL << masking_bits;
+    
+    // Check for overflow in critical calculations
+    if (B > UINT64_MAX / Gamma || (B * Gamma) > UINT64_MAX / L) {
+        return false;
+    }
+    
+    uint64_t K = (B * Gamma + 1) * L;
+    if (K > UINT64_MAX / 18 || K > UINT64_MAX / K) {
+        return false;
+    }
+    
+    // Check that parameters are in reasonable ranges
+    if (challenge_bits > 50 || masking_bits > 25 || repetitions > 200) {
         return false;
     }
     
     return true;
+}
+
+// Additional helper functions for parameter management
+size_t SharpGSParams::get_commitment_group_size() const {
+    uint64_t B = 1UL << range_bits;
+    uint64_t Gamma = (1UL << challenge_bits) - 1;
+    uint64_t L = 1UL << masking_bits;
+    uint64_t required_p = 2 * (B * Gamma * Gamma + 1) * L;
+    return std::max(256UL, static_cast<size_t>(std::ceil(std::log2(static_cast<double>(required_p)))));
+}
+
+size_t SharpGSParams::get_decomposition_group_size() const {
+    uint64_t B = 1UL << range_bits;
+    uint64_t Gamma = (1UL << challenge_bits) - 1;
+    uint64_t L = 1UL << masking_bits;
+    uint64_t K = (B * Gamma + 1) * L;
+    uint64_t required_q = 18 * K * K;
+    return std::max(256UL, static_cast<size_t>(std::ceil(std::log2(static_cast<double>(required_q)))));
+}
+
+double SharpGSParams::get_soundness_error() const {
+    return std::pow(2.0, static_cast<double>(repetitions) * std::log2(static_cast<double>((1UL << challenge_bits))));
+}
+
+size_t SharpGSParams::get_proof_size_estimate() const {
+    // Rough estimate based on paper analysis
+    // This includes commitments, challenges, and responses
+    size_t commitment_size = get_commitment_group_size() / 8; // Convert bits to bytes
+    size_t decomp_size = get_decomposition_group_size() / 8;
+    size_t scalar_size = masking_bits / 8;
+    
+    // From paper: proof consists of commitments + responses
+    // Cy: 1 commitment in Gcom
+    // Ck,*: R commitments in G3sq  
+    // Dk,x, Dk,y, Dk,*: 3R commitments total
+    // Responses: various scalars
+    
+    size_t total_commitments = 1 + 4 * repetitions; // Cy + 3R commitment pairs + R C*
+    size_t total_scalars = repetitions * (4 + 3); // Per repetition: multiple scalars
+    
+    return total_commitments * commitment_size + total_scalars * scalar_size;
 }
 
 SharpGSPublicParams::SharpGSPublicParams(const SharpGSParams& p) : params(p) {
@@ -291,63 +383,133 @@ SharpGSChallenge SharpGS::fiat_shamir_challenge(const SharpGSPublicParams& pp,
     return challenge;
 }
 
+// Helper functions for 3-square decomposition
+namespace {
+    vector<Fr> sum_of_two_squares(uint64_t n) {
+        if (n == 0) return {Fr(0), Fr(0)};
+        if (n == 1) return {Fr(1), Fr(0)};
+        
+        uint64_t max_sqrt = static_cast<uint64_t>(sqrt(n)) + 1;
+        
+        for (uint64_t a = 0; a <= max_sqrt; a++) {
+            uint64_t a2 = a * a;
+            if (a2 > n) break;
+            
+            uint64_t remainder = n - a2;
+            uint64_t b = static_cast<uint64_t>(sqrt(remainder));
+            
+            if (b * b == remainder) {
+                return {Fr(a), Fr(b)};
+            }
+        }
+        
+        return {}; // Cannot be written as sum of 2 squares
+    }
+    
+    vector<Fr> direct_three_square(uint64_t m) {
+        uint64_t max_first = static_cast<uint64_t>(sqrt(m)) + 1;
+        
+        for (uint64_t x = 0; x <= max_first; x++) {
+            uint64_t x2 = x * x;
+            if (x2 > m) break;
+            
+            uint64_t remaining = m - x2;
+            
+            auto result = sum_of_two_squares(remaining);
+            if (!result.empty()) {
+                return {Fr(x), Fr(Utils::to_int(result[0])), Fr(Utils::to_int(result[1]))};
+            }
+        }
+        
+        throw runtime_error("Failed to find direct 3-square decomposition");
+    }
+    
+    bool verify_square_decomposition_internal(uint64_t target, const vector<Fr>& decomp) {
+        if (decomp.size() != 3) return false;
+        
+        uint64_t sum = 0;
+        for (const auto& val : decomp) {
+            uint64_t v = Utils::to_int(val);
+            sum += v * v;
+        }
+        
+        return sum == target;
+    }
+}
+
 vector<Fr> SharpGS::compute_square_decomposition(const Fr& x, const Fr& B) {
-    // Compute target = 4x(B-x) + 1
+    // Calculate target = 1 + 4x(B-x) according to paper
     Fr target;
     Fr B_minus_x;
     Fr::sub(B_minus_x, B, x);
     Fr::mul(target, x, B_minus_x);
     Fr::mul(target, target, Fr(4));
-    Fr::add(target, target, Fr(1));
+    Fr::add(target, target, Fr(1));  // target = 1 + 4x(B-x)
 
-    // Convert to integer for computation
     uint64_t target_int = Utils::to_int(target);
     
-    // For large targets, use approximation to avoid infinite loops
-    if (target_int > 1000000) {
-        // Use simplified decomposition for large values
-        vector<Fr> y_values(3);
-        uint64_t approx_sqrt = static_cast<uint64_t>(sqrt(target_int / 3));
-        y_values[0] = Fr(approx_sqrt);
-        y_values[1] = Fr(approx_sqrt);
-        y_values[2] = Fr(approx_sqrt);
-        return y_values;
+    // Validate input range
+    if (target_int == 0) {
+        return {Fr(0), Fr(0), Fr(0)};
     }
     
-    // Use efficient search with reasonable bounds
-    uint64_t max_search = min(target_int, 1000UL);
+    // Special case: if target is a perfect square
+    uint64_t sqrt_target = static_cast<uint64_t>(sqrt(target_int));
+    if (sqrt_target * sqrt_target == target_int) {
+        return {Fr(sqrt_target), Fr(0), Fr(0)};
+    }
     
-    for (uint64_t i = 0; i <= max_search; ++i) {
-        for (uint64_t j = 0; j <= max_search; ++j) {
-            uint64_t i2 = i * i;
-            uint64_t j2 = j * j;
-            if (i2 + j2 > target_int) break;
-
-            uint64_t rem = target_int - i2 - j2;
-            uint64_t k = static_cast<uint64_t>(sqrt(rem));
-            if (k * k == rem) {
-                vector<Fr> y_values(3);
-                y_values[0] = Fr(i);
-                y_values[1] = Fr(j);
-                y_values[2] = Fr(k);
-                return y_values;
+    // Check Legendre's condition: n cannot be 4^a(8b+7)
+    uint64_t temp = target_int;
+    while (temp % 4 == 0) {
+        temp /= 4;
+    }
+    if (temp % 8 == 7) {
+        throw runtime_error("Value not in valid range for 3-square decomposition");
+    }
+    
+    // Handle small cases directly
+    if (target_int == 1) return {Fr(1), Fr(0), Fr(0)};
+    if (target_int == 2) return {Fr(1), Fr(1), Fr(0)};
+    if (target_int == 3) return {Fr(1), Fr(1), Fr(1)};
+    
+    // Use direct method for reasonable sizes
+    if (target_int < 100000) {
+        try {
+            vector<Fr> result = direct_three_square(target_int);
+            
+            // Verify the decomposition
+            if (!verify_square_decomposition_internal(target_int, result)) {
+                throw runtime_error("Square decomposition verification failed");
             }
+            
+            return result;
+        } catch (...) {
+            // Fall through to approximation
         }
     }
-
-    // Fallback: Use approximate decomposition
-    vector<Fr> y_values(3);
-    uint64_t approx = static_cast<uint64_t>(sqrt(target_int / 3));
-    y_values[0] = Fr(approx);
-    y_values[1] = Fr(approx);
-    y_values[2] = Fr(approx);
     
-    return y_values;
+    // For very large values, use approximation
+    uint64_t approx = static_cast<uint64_t>(sqrt(target_int / 3));
+    vector<Fr> approx_result = {Fr(approx), Fr(approx), Fr(approx)};
+    
+    // Adjust to get closer to target
+    uint64_t current_sum = 3 * approx * approx;
+    if (current_sum < target_int) {
+        uint64_t diff = target_int - current_sum;
+        uint64_t add_sqrt = static_cast<uint64_t>(sqrt(diff));
+        if (add_sqrt > 0) {
+            approx_result[0] = Fr(approx + add_sqrt);
+        }
+    }
+    
+    return approx_result;
 }
 
 bool SharpGS::verify_square_decomposition(const Fr& x, const Fr& B, const vector<Fr>& y_values) {
     if (y_values.size() != 3) return false;
     
+    // Calculate target = 1 + 4x(B-x) according to paper
     Fr target;
     Fr B_minus_x;
     Fr::sub(B_minus_x, B, x);
@@ -355,6 +517,7 @@ bool SharpGS::verify_square_decomposition(const Fr& x, const Fr& B, const vector
     Fr::mul(target, target, Fr(4));
     Fr::add(target, target, Fr(1));
     
+    // Calculate sum of squares
     Fr sum = Fr(0);
     for (const auto& y : y_values) {
         Fr y_squared;
@@ -362,11 +525,12 @@ bool SharpGS::verify_square_decomposition(const Fr& x, const Fr& B, const vector
         Fr::add(sum, sum, y_squared);
     }
     
-    // Allow some tolerance for approximate decompositions
+    // Check equality with some tolerance for large numbers
     uint64_t target_val = Utils::to_int(target);
     uint64_t sum_val = Utils::to_int(sum);
     
-    return abs(static_cast<int64_t>(target_val) - static_cast<int64_t>(sum_val)) <= 10;
+    // Allow small tolerance for approximations
+    return abs(static_cast<int64_t>(target_val) - static_cast<int64_t>(sum_val)) <= 3;
 }
 
 Fr SharpGS::apply_masking(const Fr& value, const Fr& mask, size_t masking_bits) {

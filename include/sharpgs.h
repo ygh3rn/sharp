@@ -29,6 +29,12 @@ struct SharpGSParams {
     size_t get_range_bound() const { return 1UL << range_bits; }
     size_t get_challenge_bound() const { return (1UL << challenge_bits) - 1; }
     size_t get_masking_bound() const { return (1UL << masking_bits) - 1; }
+    
+    // Additional helper functions
+    size_t get_commitment_group_size() const;
+    size_t get_decomposition_group_size() const;
+    double get_soundness_error() const;
+    size_t get_proof_size_estimate() const;
 };
 
 // Public parameters for SharpGS
