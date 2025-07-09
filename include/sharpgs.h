@@ -29,12 +29,6 @@ struct SharpGSParams {
     size_t get_range_bound() const { return 1UL << range_bits; }
     size_t get_challenge_bound() const { return (1UL << challenge_bits) - 1; }
     size_t get_masking_bound() const { return (1UL << masking_bits) - 1; }
-    
-    // Additional helper functions
-    size_t get_commitment_group_size() const;
-    size_t get_decomposition_group_size() const;
-    double get_soundness_error() const;
-    size_t get_proof_size_estimate() const;
 };
 
 // Public parameters for SharpGS
@@ -135,24 +129,20 @@ public:
                                                  const SharpGSStatement& stmt,
                                                  const SharpGSFirstMessage& first_msg);
 
-private:
-    // Compute 3-square decomposition: 4x(B-x) + 1 = Σ y²ᵢ
+    // Public methods for testing and debugging
     static vector<Fr> compute_square_decomposition(const Fr& x, const Fr& B);
-    
-    // Verify square decomposition
     static bool verify_square_decomposition(const Fr& x, const Fr& B, const vector<Fr>& y_values);
-    
-    // Masking operations for zero-knowledge
-    static Fr apply_masking(const Fr& value, const Fr& mask, size_t masking_bits);
     static bool check_masking_bounds(const Fr& masked_value, size_t range_bits, 
                                    size_t challenge_bits, size_t masking_bits);
-    
-    // Compute decomposition polynomial coefficients
     static vector<Fr> compute_decomposition_coeffs(const vector<Fr>& x_values,
                                                    const vector<vector<Fr>>& y_values,
                                                    const vector<Fr>& x_masks,
                                                    const vector<Fr>& y_masks,
                                                    const Fr& B);
+
+private:
+    // Masking operations for zero-knowledge
+    static Fr apply_masking(const Fr& challenge, const Fr& value, size_t masking_bits);
     
     // Random Affine Shortness Test (RAST) implementation
     static bool random_affine_shortness_test(const vector<Fr>& values, 
