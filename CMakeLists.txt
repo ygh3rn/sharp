@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.12)
-project(SharpGS)
+project(Sharp)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,46 +20,43 @@ endif()
 include_directories(${MCL_INCLUDE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native -Wall -Wextra")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native")
 
 set(SOURCES
-    src/groups.cpp
-    src/commitments.cpp
-    src/masking.cpp
+    src/ntt.cpp
     src/polynomial.cpp
-    src/sharp_gs.cpp
+    src/commitments.cpp
+    src/sharpgs.cpp
+    src/utils.cpp
 )
 
-add_executable(test_suite tests/test_suite.cpp ${SOURCES})
-target_link_libraries(test_suite ${MCL_LIBRARY})
+# Main test executable
+add_executable(test_sharpgs tests/test_sharpgs.cpp ${SOURCES})
+target_link_libraries(test_sharpgs ${MCL_LIBRARY})
 
-set_target_properties(test_suite PROPERTIES
+# Example executable
+add_executable(range_proof_demo examples/range_proof_demo.cpp ${SOURCES})
+target_link_libraries(range_proof_demo ${MCL_LIBRARY})
+
+set_target_properties(test_sharpgs range_proof_demo PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
 enable_testing()
-add_test(NAME sharp_gs_test COMMAND test_suite)
+add_test(NAME sharpgs_test COMMAND test_sharpgs)
 
-# Demo executable
-add_executable(demo examples/demo.cpp ${SOURCES})
-target_link_libraries(demo ${MCL_LIBRARY})
-
-set_target_properties(demo PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-)
-
-add_custom_target(run
-    COMMAND test_suite
-    DEPENDS test_suite
+add_custom_target(run_tests
+    COMMAND test_sharpgs
+    DEPENDS test_sharpgs
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running SharpGS test suite"
 )
 
 add_custom_target(run_demo
-    COMMAND demo
-    DEPENDS demo
+    COMMAND range_proof_demo
+    DEPENDS range_proof_demo
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running SharpGS demo"
+    COMMENT "Running range proof demo"
 )
 
 message(STATUS "MCL include directory: ${MCL_INCLUDE_DIR}")
