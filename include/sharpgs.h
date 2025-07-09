@@ -20,7 +20,15 @@ struct SharpGSParams {
     Fr p_order;                 // Order of commitment group
     Fr q_order;                 // Order of decomposition group
     
-    SharpGSParams(size_t sec_level = 128, size_t range_b = 64);
+    SharpGSParams(size_t sec_level = 128, size_t range_b = 32);
+    
+    // Validate parameters according to paper constraints
+    bool validate_parameters() const;
+    
+    // Get actual bounds
+    size_t get_range_bound() const { return 1UL << range_bits; }
+    size_t get_challenge_bound() const { return (1UL << challenge_bits) - 1; }
+    size_t get_masking_bound() const { return (1UL << masking_bits) - 1; }
 };
 
 // Public parameters for SharpGS
@@ -139,4 +147,9 @@ private:
                                                    const vector<Fr>& x_masks,
                                                    const vector<Fr>& y_masks,
                                                    const Fr& B);
+    
+    // Random Affine Shortness Test (RAST) implementation
+    static bool random_affine_shortness_test(const vector<Fr>& values, 
+                                             const vector<Fr>& challenges,
+                                             const Fr& bound);
 };
