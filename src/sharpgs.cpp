@@ -228,43 +228,37 @@ SharpGSChallenge SharpGS::fiat_shamir_challenge(const SharpGSPublicParams& pp,
 }
 
 vector<Fr> SharpGS::compute_square_decomposition(const Fr& x, const Fr& B) {
-    // Compute 4x(B-x) + 1 = sum of 3 squares
+    // Compute target = 4x(B-x) + 1
     Fr target;
     Fr B_minus_x;
     Fr::sub(B_minus_x, B, x);
     Fr::mul(target, x, B_minus_x);
     Fr::mul(target, target, Fr(4));
     Fr::add(target, target, Fr(1));
-    
-    // Use a simple decomposition method (can be optimized)
-    vector<Fr> y_values(3);
-    
-    // Simple case: try y1^2 = target, y2 = y3 = 0
-    if (target.squareRoot(y_values[0], target)) {
-        y_values[1] = Fr(0);
-        y_values[2] = Fr(0);
-        return y_values;
+
+    // Convert target to integer for brute force
+    uint64_t target_int = Utils::to_int(target);
+    uint64_t cap = static_cast<uint64_t>(sqrt(target_int)) + 1;
+
+    for (uint64_t i = 0; i <= cap; ++i) {
+        for (uint64_t j = 0; j <= cap; ++j) {
+            uint64_t i2 = i * i;
+            uint64_t j2 = j * j;
+            if (i2 + j2 > target_int) continue;
+
+            uint64_t rem = target_int - i2 - j2;
+            uint64_t k = static_cast<uint64_t>(sqrt(rem));
+            if (k * k == rem) {
+                vector<Fr> y_values(3);
+                y_values[0] = Fr(i);
+                y_values[1] = Fr(j);
+                y_values[2] = Fr(k);
+                return y_values;
+            }
+        }
     }
-    
-    // More complex decomposition needed
-    // For now, use a simplified approach
-    y_values[0] = Fr(1);
-    y_values[1] = Fr(1);
-    
-    Fr remaining;
-    Fr temp1, temp2;
-    Fr::mul(temp1, y_values[0], y_values[0]);
-    Fr::mul(temp2, y_values[1], y_values[1]);
-    Fr::sub(remaining, target, temp1);
-    Fr::sub(remaining, remaining, temp2);
-    
-    if (remaining.squareRoot(y_values[2], remaining)) {
-        return y_values;
-    }
-    
-    // Fallback - this should be improved with proper 3-square algorithm
-    y_values[2] = Fr(0);
-    return y_values;
+
+    throw runtime_error("No valid square decomposition found.");
 }
 
 bool SharpGS::verify_square_decomposition(const Fr& x, const Fr& B, const vector<Fr>& y_values) {
