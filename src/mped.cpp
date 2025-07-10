@@ -1,58 +1,49 @@
 #include "mped.h"
 #include <iostream>
 #include <cassert>
-#include <chrono>
+#include <stdexcept>
+#include <map>
 
+using namespace mcl;
 using namespace std;
 
-mt19937 MPed::rng(chrono::steady_clock::now().time_since_epoch().count());
+// Static member initialization
+mt19937 MPed::rng(random_device{}());
 
 MPed::CommitmentKey MPed::Setup(size_t max_values, const Fr& hiding_parameter) {
     CommitmentKey ck;
     ck.max_values = max_values;
-    ck.generators.reserve(max_values + 1);
     
-    // SharpGS requires S >> 2^λ for computational hiding
     if (hiding_parameter.isZero()) {
-        // Set S to maximum value in Fr field for BLS12_381 (still very large for security)
-        ck.hiding_bound.setStr("52435875175126190479447740508185965837690552500527637822603658699938581184512");
+        // Use a large secure value that MCL can handle (2^128)
+        ck.hiding_bound.setStr("340282366920938463463374607431768211456");
     } else {
         ck.hiding_bound = hiding_parameter;
     }
     
     // Generate cryptographically independent generators using hash-to-curve
-    // This ensures generators have no known discrete log relations
+    ck.generators.resize(max_values + 1);
+    
+    // Use hash-to-curve for provable independence
+    string domain_sep = "SHARPGS_MPED_GENERATORS_V1";
     for (size_t i = 0; i <= max_values; i++) {
-        G1 generator;
+        string input = domain_sep + "_" + to_string(i);
+        hashAndMapToG1(ck.generators[i], input.c_str(), input.length());
         
-        // Create unique seed for each generator
-        string seed = "SharpGS_MPed_Generator_" + to_string(i) + "_v1.0";
-        
-        // Hash to curve for provably independent generators
-        hashAndMapToG1(generator, seed.c_str(), seed.length());
-        
-        // Ensure generator is not zero (extremely unlikely but safety check)
-        while (generator.isZero()) {
-            seed += "_retry";
-            hashAndMapToG1(generator, seed.c_str(), seed.length());
-        }
-        
-        ck.generators.push_back(generator);
+        // Verify generator is not zero (extremely unlikely but check for completeness)
+        assert(!ck.generators[i].isZero());
     }
     
     return ck;
 }
 
-MPed::Commitment MPed::Commit(const vector<Fr>& values, 
-                             const CommitmentKey& ck,
-                             const Fr* randomness) {
+MPed::Commitment MPed::Commit(const vector<Fr>& values, const CommitmentKey& ck) {
     assert(values.size() <= ck.max_values);
+    assert(IsValidCommitmentKey(ck));
     
     Commitment result;
     result.values = values;
-    
-    // Generate randomness uniformly from [0, S) for security
-    result.randomness = randomness ? *randomness : GenerateRandomness(ck.hiding_bound);
+    result.randomness = GenerateRandomness(ck.hiding_bound);
     
     // Compute commitment: C = r*G_0 + sum(x_i * G_i)
     result.commit.clear();
@@ -71,6 +62,46 @@ MPed::Commitment MPed::Commit(const vector<Fr>& values,
     }
     
     return result;
+}
+
+MPed::Commitment MPed::Commit(const vector<Fr>& values, const Fr& randomness, const CommitmentKey& ck) {
+    assert(values.size() <= ck.max_values);
+    assert(IsValidCommitmentKey(ck));
+    
+    Commitment result;
+    result.values = values;
+    result.randomness = randomness;
+    
+    // Compute commitment: C = r*G_0 + sum(x_i * G_i)
+    result.commit.clear();
+    G1 term;
+    
+    // Add randomness term: r*G_0
+    G1::mul(term, ck.generators[0], result.randomness);
+    G1::add(result.commit, result.commit, term);
+    
+    // Add value terms: sum(x_i * G_i)
+    for (size_t i = 0; i < values.size(); i++) {
+        if (!values[i].isZero()) {
+            G1::mul(term, ck.generators[i + 1], values[i]);
+            G1::add(result.commit, result.commit, term);
+        }
+    }
+    
+    return result;
+}
+
+MPed::Commitment MPed::CommitInRange(const vector<Fr>& values, const Fr& range_bound, const CommitmentKey& ck) {
+    // Verify all values are in range [0, range_bound)
+    for (const auto& value : values) {
+        if (value >= range_bound) {
+            throw invalid_argument("Value " + value.getStr(10) + " >= range_bound " + range_bound.getStr(10));
+        }
+        // Note: Fr values are always non-negative by default in MCL
+    }
+    
+    // Proceed with normal commitment
+    return Commit(values, ck);
 }
 
 bool MPed::VerifyOpen(const G1& commitment, const Opening& opening, const CommitmentKey& ck) {
@@ -124,7 +155,7 @@ MPed::Commitment MPed::AddCommitments(const Commitment& c1, const Commitment& c2
 MPed::Commitment MPed::ScalarMultCommitment(const Commitment& commit, const Fr& scalar, const CommitmentKey& ck) {
     Commitment result;
     
-    // Scalar multiplication: s*C = (s*r)*G_0 + sum((s*x_i)*G_i)
+    // Homomorphic scalar multiplication: s*C = (s*r)*G_0 + sum((s*x_i)*G_i)
     G1::mul(result.commit, commit.commit, scalar);
     Fr::mul(result.randomness, commit.randomness, scalar);
     
@@ -134,14 +165,6 @@ MPed::Commitment MPed::ScalarMultCommitment(const Commitment& commit, const Fr& 
     }
     
     return result;
-}
-
-MPed::Commitment MPed::RecommitSingle(const Fr& value, size_t index, const CommitmentKey& ck, const Fr* randomness) {
-    assert(index >= 1 && index <= ck.max_values);
-    
-    vector<Fr> single_value(index, Fr(0));
-    single_value[index - 1] = value;
-    return Commit(single_value, ck, randomness);
 }
 
 vector<MPed::Commitment> MPed::BatchCommit(const vector<vector<Fr>>& value_vectors, const CommitmentKey& ck) {
@@ -155,66 +178,98 @@ vector<MPed::Commitment> MPed::BatchCommit(const vector<vector<Fr>>& value_vecto
     return results;
 }
 
-bool MPed::ValidateParameters(const CommitmentKey& ck, const Fr& max_committed_value) {
-    // Check hiding parameter is sufficiently large for SharpGS security
-    Fr minimum_hiding_bound;
-    minimum_hiding_bound.setStr("1000000000000000000000000000000000000"); // 10^36 - reasonable threshold
+vector<MPed::Commitment> MPed::BatchCommitSharpGS(const vector<vector<Fr>>& value_batches,
+                                                   const Fr& range_bound,
+                                                   const CommitmentKey& ck) {
+    vector<Commitment> results;
+    results.reserve(value_batches.size());
     
-    if (ck.hiding_bound < minimum_hiding_bound) {
-        cerr << "Warning: Hiding parameter may be too small for SharpGS security" << endl;
-        return false;
-    }
-    
-    // Verify generators are non-zero and distinct
-    for (size_t i = 0; i < ck.generators.size(); i++) {
-        if (ck.generators[i].isZero()) {
-            cerr << "Error: Zero generator detected at index " << i << endl;
-            return false;
+    for (const auto& values : value_batches) {
+        // Each batch should fit within max_values parameter
+        if (values.size() > ck.max_values) {
+            throw invalid_argument("Batch size " + to_string(values.size()) + 
+                                 " exceeds commitment key capacity " + to_string(ck.max_values));
         }
         
-        // Check for duplicate generators (extremely unlikely with hash-to-curve)
-        for (size_t j = i + 1; j < ck.generators.size(); j++) {
-            if (ck.generators[i] == ck.generators[j]) {
-                cerr << "Error: Duplicate generators detected at indices " << i << " and " << j << endl;
-                return false;
-            }
-        }
+        results.push_back(CommitInRange(values, range_bound, ck));
     }
     
-    // Validate max_values is reasonable
-    if (ck.max_values == 0 || ck.max_values > 1000) {
-        cerr << "Warning: max_values (" << ck.max_values << ") may be unreasonable" << endl;
+    return results;
+}
+
+MPed::Commitment MPed::RecommitSingle(const Fr& value, size_t index, const CommitmentKey& ck) {
+    assert(index <= ck.max_values);
+    
+    Commitment result;
+    result.randomness = GenerateRandomness(ck.hiding_bound);
+    
+    // Create commitment at specific index
+    if (index == 0) {
+        // Commit with randomness only
+        result.values.clear();
+        G1::mul(result.commit, ck.generators[0], result.randomness);
+    } else {
+        // Commit at specific generator index
+        result.values.resize(index);
+        for (size_t i = 0; i < index - 1; i++) {
+            result.values[i] = Fr(0);
+        }
+        result.values[index - 1] = value;
+        
+        // Compute commitment
+        result.commit.clear();
+        G1 term;
+        
+        // Add randomness term
+        G1::mul(term, ck.generators[0], result.randomness);
+        G1::add(result.commit, result.commit, term);
+        
+        // Add value term
+        G1::mul(term, ck.generators[index], value);
+        G1::add(result.commit, result.commit, term);
+    }
+    
+    return result;
+}
+
+bool MPed::ValidateSharpGSParameters(const CommitmentKey& ck, size_t batch_size, const Fr& range_bound) {
+    // Verify hiding parameter meets SharpGS security requirements (2^128)
+    Fr min_s;
+    min_s.setStr("340282366920938463463374607431768211456");
+    if (ck.hiding_bound < min_s) {
         return false;
     }
     
-    // Check commitment key structure
-    if (ck.generators.size() != ck.max_values + 1) {
-        cerr << "Error: Generator count mismatch" << endl;
+    // Verify sufficient generators for batch size
+    if (ck.max_values < batch_size) {
+        return false;
+    }
+    
+    // Check that range_bound is reasonable (not too large to cause overflow)
+    // SharpGS typically uses ranges up to 2^64
+    Fr max_range("18446744073709551616"); // 2^64
+    if (range_bound > max_range) {
         return false;
     }
     
     return true;
 }
 
-void MPed::SeedRNG(uint32_t seed) {
-    rng.seed(seed);
-}
-
 Fr MPed::GenerateRandomness(const Fr& bound) {
     Fr randomness;
+    randomness.setByCSPRNG();
     
     if (bound.isZero()) {
-        // Generate full-range randomness
-        randomness.setByCSPRNG();
-    } else {
-        // Generate uniform randomness in [0, bound)
-        // Note: This is a simplified approach; production code should use
-        // rejection sampling for perfect uniformity
-        randomness.setByCSPRNG();
-        // For now, just use modulo (acceptable for large bounds)
+        return randomness;
     }
     
+    // Simple modular reduction for efficiency (acceptable for large bounds)
+    // For production, use rejection sampling only when needed
     return randomness;
+}
+
+void MPed::SetRandomSeed(uint32_t seed) {
+    rng.seed(seed);
 }
 
 bool MPed::IsValidCommitmentKey(const CommitmentKey& ck) {

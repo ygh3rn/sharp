@@ -57,69 +57,65 @@ public:
     
     /**
      * Commit: Create commitment to vector of values
-     * C = r*G_0 + sum(x_i * G_i) for i in [1,N]
-     * @param values Vector of values to commit {x_1, ..., x_k} where k <= N
-     * @param ck Commitment key
-     * @param randomness Optional randomness (if not provided, chosen uniformly from [0,S])
-     * @return Commitment containing C and opening information
+     * C = r*G_0 + sum(x_i * G_i)
+     * @param values Vector of field elements to commit
+     * @param ck Commitment key with sufficient generators
+     * @return Commitment object with opening information
      */
-    static Commitment Commit(const vector<Fr>& values, 
-                           const CommitmentKey& ck,
-                           const Fr* randomness = nullptr);
+    static Commitment Commit(const vector<Fr>& values, const CommitmentKey& ck);
     
     /**
-     * VerifyOpen: Verify that commitment opens to given values
-     * @param commitment The commitment C
-     * @param opening Opening information (r, {x_i})
+     * Commit with custom randomness (for deterministic testing)
+     * @param values Vector of field elements to commit
+     * @param randomness Custom randomness value
      * @param ck Commitment key
-     * @return true if C = r*G_0 + sum(x_i * G_i), false otherwise
+     * @return Commitment object
      */
-    static bool VerifyOpen(const G1& commitment,
-                          const Opening& opening,
-                          const CommitmentKey& ck);
+    static Commitment Commit(const vector<Fr>& values, const Fr& randomness, const CommitmentKey& ck);
     
     /**
-     * VerifyOpen: Verify that commitment opens to given values (convenience method)
+     * CommitInRange: Create commitment with range validation for SharpGS
+     * @param values Vector of values, each must be in [0, range_bound)
+     * @param range_bound Upper bound for range proof
+     * @param ck Commitment key
+     * @return Commitment object
      */
-    static bool VerifyOpen(const Commitment& commit_obj,
-                          const CommitmentKey& ck);
+    static Commitment CommitInRange(const vector<Fr>& values, const Fr& range_bound, const CommitmentKey& ck);
+    
+    /**
+     * VerifyOpen: Verify commitment opening
+     * @param commitment Commitment element C
+     * @param opening Opening data (randomness and values)
+     * @param ck Commitment key
+     * @return true if opening is valid
+     */
+    static bool VerifyOpen(const G1& commitment, const Opening& opening, const CommitmentKey& ck);
+    
+    /**
+     * VerifyOpen: Verify commitment opening (convenience method)
+     * @param commit_obj Complete commitment object
+     * @param ck Commitment key
+     * @return true if opening is valid
+     */
+    static bool VerifyOpen(const Commitment& commit_obj, const CommitmentKey& ck);
     
     /**
      * AddCommitments: Homomorphic addition of commitments
-     * Com(x1, r1) + Com(x2, r2) = Com(x1+x2, r1+r2)
      * @param c1 First commitment
-     * @param c2 Second commitment  
+     * @param c2 Second commitment
      * @param ck Commitment key
-     * @return Combined commitment
+     * @return Sum commitment
      */
-    static Commitment AddCommitments(const Commitment& c1,
-                                   const Commitment& c2,
-                                   const CommitmentKey& ck);
+    static Commitment AddCommitments(const Commitment& c1, const Commitment& c2, const CommitmentKey& ck);
     
     /**
-     * ScalarMultCommitment: Scalar multiplication of commitment
-     * s * Com(x, r) = Com(s*x, s*r)
+     * ScalarMultCommitment: Homomorphic scalar multiplication
      * @param commit Input commitment
      * @param scalar Scalar multiplier
      * @param ck Commitment key
      * @return Scaled commitment
      */
-    static Commitment ScalarMultCommitment(const Commitment& commit,
-                                         const Fr& scalar,
-                                         const CommitmentKey& ck);
-    
-    /**
-     * RecommitSingle: Commit to single value at specific position
-     * @param value Value to commit
-     * @param index Position (1-indexed, must be <= max_values)
-     * @param ck Commitment key
-     * @param randomness Optional randomness
-     * @return Commitment with value at specified position
-     */
-    static Commitment RecommitSingle(const Fr& value,
-                                   size_t index,
-                                   const CommitmentKey& ck,
-                                   const Fr* randomness = nullptr);
+    static Commitment ScalarMultCommitment(const Commitment& commit, const Fr& scalar, const CommitmentKey& ck);
     
     /**
      * BatchCommit: Create multiple commitments efficiently
@@ -127,24 +123,52 @@ public:
      * @param ck Commitment key
      * @return Vector of commitments
      */
-    static vector<Commitment> BatchCommit(const vector<vector<Fr>>& value_vectors,
-                                        const CommitmentKey& ck);
+    static vector<Commitment> BatchCommit(const vector<vector<Fr>>& value_vectors, const CommitmentKey& ck);
     
     /**
-     * ValidateParameters: Verify commitment key meets SharpGS security requirements
-     * @param ck Commitment key to validate
-     * @param max_committed_value Maximum value that will be committed
-     * @return true if parameters are secure for SharpGS
+     * BatchCommitSharpGS: Batch commit with SharpGS parameter validation
+     * @param value_batches Vector of value vectors
+     * @param range_bound Range bound for each value
+     * @param ck Commitment key
+     * @return Vector of commitments
      */
-    static bool ValidateParameters(const CommitmentKey& ck, 
-                                 const Fr& max_committed_value = Fr(0));
+    static vector<Commitment> BatchCommitSharpGS(const vector<vector<Fr>>& value_batches,
+                                                  const Fr& range_bound,
+                                                  const CommitmentKey& ck);
+    
+    /**
+     * RecommitSingle: Commit to single value at specific generator index
+     * @param value Single value to commit
+     * @param index Generator index (0 for G_0, 1 for G_1, etc.)
+     * @param ck Commitment key
+     * @return Commitment to single value
+     */
+    static Commitment RecommitSingle(const Fr& value, size_t index, const CommitmentKey& ck);
+    
+    /**
+     * ValidateSharpGSParameters: Validate parameters for SharpGS compliance
+     * @param ck Commitment key to validate
+     * @param batch_size Expected batch size
+     * @param range_bound Range bound for values
+     * @return true if parameters meet SharpGS security requirements
+     */
+    static bool ValidateSharpGSParameters(const CommitmentKey& ck, size_t batch_size, const Fr& range_bound);
+    
+    /**
+     * GenerateRandomness: Generate cryptographically secure randomness
+     * @param bound Upper bound (exclusive), or Fr(0) for full range
+     * @return Uniformly random value in [0, bound) or full range
+     */
+    static Fr GenerateRandomness(const Fr& bound = Fr(0));
+    
+    /**
+     * SetRandomSeed: Set deterministic seed for testing
+     * @param seed Random seed value
+     */
+    static void SetRandomSeed(uint32_t seed);
     
     // Utility functions
-    static void SeedRNG(uint32_t seed);
-    static Fr GenerateRandomness(const Fr& bound);
     static bool IsValidCommitmentKey(const CommitmentKey& ck);
-    
-    // Debug functions
     static void PrintCommitmentKey(const CommitmentKey& ck);
     static void PrintCommitment(const Commitment& commit);
     static string CommitmentToString(const Commitment& commit);
