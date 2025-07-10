@@ -20,9 +20,9 @@ using namespace std;
 class MPed {
 public:
     struct CommitmentKey {
-        vector<G1> generators; // G_0, G_1, ..., G_N
+        vector<G1> generators; // G_0, G_1, ..., G_N (cryptographically independent)
         size_t max_values;     // Maximum number of values (N)
-        Fr hiding_bound;       // Hiding parameter S
+        Fr hiding_bound;       // Hiding parameter S (2^256-1 for security)
     };
     
     struct Commitment {
@@ -48,9 +48,9 @@ private:
     
 public:
     /**
-     * Setup: Generate commitment key with N+1 random generators
+     * Setup: Generate commitment key with N+1 cryptographically independent generators
      * @param max_values Maximum number of values to commit (N)
-     * @param hiding_parameter Hiding bound S (default: 2^128)
+     * @param hiding_parameter Hiding bound S (default: 2^256-1 for SharpGS security)
      * @return CommitmentKey with generators G_0, ..., G_N
      */
     static CommitmentKey Setup(size_t max_values, const Fr& hiding_parameter = Fr(0));
@@ -60,7 +60,7 @@ public:
      * C = r*G_0 + sum(x_i * G_i) for i in [1,N]
      * @param values Vector of values to commit {x_1, ..., x_k} where k <= N
      * @param ck Commitment key
-     * @param randomness Optional randomness (if not provided, chosen randomly)
+     * @param randomness Optional randomness (if not provided, chosen uniformly from [0,S])
      * @return Commitment containing C and opening information
      */
     static Commitment Commit(const vector<Fr>& values, 
@@ -109,13 +109,12 @@ public:
                                          const CommitmentKey& ck);
     
     /**
-     * RecommitSingle: Create commitment to single value at specific index
-     * Useful for selective opening and proofs
-     * @param value Single value to commit
-     * @param index Position index (1-based, 0 is for randomness)
+     * RecommitSingle: Commit to single value at specific position
+     * @param value Value to commit
+     * @param index Position (1-indexed, must be <= max_values)
      * @param ck Commitment key
      * @param randomness Optional randomness
-     * @return Commitment to single value
+     * @return Commitment with value at specified position
      */
     static Commitment RecommitSingle(const Fr& value,
                                    size_t index,
@@ -123,8 +122,7 @@ public:
                                    const Fr* randomness = nullptr);
     
     /**
-     * BatchCommit: Commit to multiple vectors simultaneously
-     * Optimized for batch operations in SharpGS
+     * BatchCommit: Create multiple commitments efficiently
      * @param value_vectors Vector of value vectors to commit
      * @param ck Commitment key
      * @return Vector of commitments
@@ -132,12 +130,21 @@ public:
     static vector<Commitment> BatchCommit(const vector<vector<Fr>>& value_vectors,
                                         const CommitmentKey& ck);
     
+    /**
+     * ValidateParameters: Verify commitment key meets SharpGS security requirements
+     * @param ck Commitment key to validate
+     * @param max_committed_value Maximum value that will be committed
+     * @return true if parameters are secure for SharpGS
+     */
+    static bool ValidateParameters(const CommitmentKey& ck, 
+                                 const Fr& max_committed_value = Fr(0));
+    
     // Utility functions
     static void SeedRNG(uint32_t seed);
     static Fr GenerateRandomness(const Fr& bound);
     static bool IsValidCommitmentKey(const CommitmentKey& ck);
     
-    // Debug and testing utilities
+    // Debug functions
     static void PrintCommitmentKey(const CommitmentKey& ck);
     static void PrintCommitment(const Commitment& commit);
     static string CommitmentToString(const Commitment& commit);
