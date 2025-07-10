@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.12)
-project(Sharp)
+project(SharpGS)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,43 +20,32 @@ endif()
 include_directories(${MCL_INCLUDE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# Optimization flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native")
 
+# Source files
 set(SOURCES
-    src/ntt.cpp
-    src/polynomial.cpp
-    src/commitments.cpp
-    src/sharpgs.cpp
-    src/utils.cpp
+    src/mped.cpp
 )
 
-# Main test executable
-add_executable(test_sharpgs tests/test_sharpgs.cpp ${SOURCES})
-target_link_libraries(test_sharpgs ${MCL_LIBRARY})
+# Test executable for checkpoint 1
+add_executable(test_mped tests/test_mped.cpp ${SOURCES})
+target_link_libraries(test_mped ${MCL_LIBRARY})
 
-# Example executable
-add_executable(range_proof_demo examples/range_proof_demo.cpp ${SOURCES})
-target_link_libraries(range_proof_demo ${MCL_LIBRARY})
-
-set_target_properties(test_sharpgs range_proof_demo PROPERTIES
+set_target_properties(test_mped PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+# Enable testing
 enable_testing()
-add_test(NAME sharpgs_test COMMAND test_sharpgs)
+add_test(NAME mped_test COMMAND test_mped)
 
-add_custom_target(run_tests
-    COMMAND test_sharpgs
-    DEPENDS test_sharpgs
+# Custom target for running tests
+add_custom_target(run_test
+    COMMAND test_mped
+    DEPENDS test_mped
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running SharpGS test suite"
-)
-
-add_custom_target(run_demo
-    COMMAND range_proof_demo
-    DEPENDS range_proof_demo
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running range proof demo"
+    COMMENT "Running MPed test suite"
 )
 
 message(STATUS "MCL include directory: ${MCL_INCLUDE_DIR}")
