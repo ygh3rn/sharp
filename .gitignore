@@ -1,15 +1,12 @@
 # Build artifacts
 build/
-build-*/
 *.o
 *.a
 *.so
-*.dylib
 
 # Executables
-test_suite
-sharp_gs_demo
-sharp_gs_benchmark
+test_sharpgs
+sharpgs_demo
 
 # IDE files
 .vscode/
@@ -18,65 +15,24 @@ sharp_gs_benchmark
 *.swo
 *~
 
-# macOS
+# OS files
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Windows
 Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
 
 # Temporary files
 *.tmp
-*.temp
-*.log
+input.tmp
+output.tmp
 
-# CMake files
+# Generated files
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 Makefile
-*.cmake
-!CMakeLists.txt
 
-# Test outputs
-test_results/
-benchmark_results/
-*.test
-*.bench
+# Debug files
+*.dSYM/
+*.su
 
-# Documentation build
-docs/build/
-docs/_build/
-
-# Package management
-conan/
-vcpkg/
-.conan/
-
-# Profiling and debugging
-*.prof
-*.gcno
-*.gcda
-*.gcov
-callgrind.out.*
-massif.out.*
-gmon.out
-
-# Backup files
-*.bak
-*.backup
-*.orig
-
-# Compressed files (unless needed)
-*.zip
-*.tar.gz
-*.7z
-
-# Generated code (if any)
-*_generated.*
-*.pb.h
-*.pb.cc
+# GP/PARI temporary files
+*.gp.log

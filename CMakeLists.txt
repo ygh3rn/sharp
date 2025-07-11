@@ -17,63 +17,60 @@ if(NOT MCL_INCLUDE_DIR OR NOT MCL_LIBRARY)
     message(FATAL_ERROR "MCL library not found. Please install MCL first.")
 endif()
 
+# Find GP/PARI for three squares decomposition
+find_program(GP_EXECUTABLE gp
+    PATHS /usr/bin /usr/local/bin
+    DOC "GP/PARI calculator executable")
+
+if(NOT GP_EXECUTABLE)
+    message(WARNING "GP/PARI not found. Three squares decomposition will be limited.")
+endif()
+
 include_directories(${MCL_INCLUDE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# Optimization flags
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native")
 
-# Core source files
-set(CORE_SOURCES
-    src/mped.cpp
+set(SOURCES
+    src/three_squares.cpp
+    src/commitment.cpp
     src/masking.cpp
-    src/threesquares.cpp
+    src/sharpgs.cpp
 )
 
-# Test executables
-add_executable(test_mped tests/test_mped.cpp src/mped.cpp)
-target_link_libraries(test_mped ${MCL_LIBRARY})
+# Create main library
+add_library(sharpgs_lib ${SOURCES})
+target_link_libraries(sharpgs_lib ${MCL_LIBRARY})
 
-add_executable(test_masking tests/test_masking.cpp src/mped.cpp src/masking.cpp)
-target_link_libraries(test_masking ${MCL_LIBRARY})
+# Create test executable
+add_executable(test_sharpgs tests/test_sharpgs.cpp)
+target_link_libraries(test_sharpgs sharpgs_lib ${MCL_LIBRARY})
 
-add_executable(test_threesquares tests/test_threesquares.cpp src/threesquares.cpp)
-target_link_libraries(test_threesquares ${MCL_LIBRARY})
+# Create demo executable
+add_executable(demo_sharpgs demo/demo_sharpgs.cpp)
+target_link_libraries(demo_sharpgs sharpgs_lib ${MCL_LIBRARY})
 
-# Set output directory
-set_target_properties(test_mped test_masking test_threesquares PROPERTIES
+set_target_properties(test_sharpgs demo_sharpgs PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
 # Enable testing
 enable_testing()
-add_test(NAME mped_test COMMAND test_mped)
-add_test(NAME masking_test COMMAND test_masking)
-add_test(NAME threesquares_test COMMAND test_threesquares)
+add_test(NAME sharpgs_test COMMAND test_sharpgs)
 
-# Custom targets for testing
-add_custom_target(run_checkpoint1
-    COMMAND test_mped
-    DEPENDS test_mped
+add_custom_target(run
+    COMMAND test_sharpgs
+    DEPENDS test_sharpgs
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running Checkpoint 1: MPed Tests"
+    COMMENT "Running SharpGS test suite"
 )
 
-add_custom_target(run_checkpoint2
-    COMMAND test_masking
-    DEPENDS test_masking
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running Checkpoint 2: Masking Tests"
-)
-
-add_custom_target(run_all_tests
-    COMMAND test_mped && test_masking && test_threesquares
-    DEPENDS test_mped test_masking test_threesquares
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running All Tests"
-)
+# Copy GP script to build directory
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/scripts/three_squares.gp 
+               ${CMAKE_BINARY_DIR}/three_squares.gp COPYONLY)
 
 message(STATUS "MCL include directory: ${MCL_INCLUDE_DIR}")
 message(STATUS "MCL library: ${MCL_LIBRARY}")
+message(STATUS "GP/PARI executable: ${GP_EXECUTABLE}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "CXX flags: ${CMAKE_CXX_FLAGS}")
