@@ -1,156 +1,86 @@
 #pragma once
 
-#include <mcl/bn.hpp>
+/**
+ * FIXED Masking and Rejection Sampling - Checkpoint 2
+ * Uses BLS12-381 field-compliant parameters for proper MCL operation
+ */
+
+#include <mcl/bls12_381.hpp>
 #include <vector>
 #include <optional>
 #include <random>
+#include <cmath>
 
 using namespace mcl;
 using namespace std;
 
-/**
- * Masking and Rejection Sampling for SharpGS
- * 
- * Implements uniform rejection sampling as described in the SharpGS paper
- * to mask witnesses and randomness with statistical hiding guarantees.
- */
 class Masking {
 public:
-    // Masking result type
     template<typename T>
     struct MaskResult {
         T masked_value;
         bool success;
+        size_t trials_used;
         
-        MaskResult() : success(false) {}
-        MaskResult(const T& value) : masked_value(value), success(true) {}
+        MaskResult() : success(false), trials_used(0) {}
+        MaskResult(const T& value, size_t trials = 1) 
+            : masked_value(value), success(true), trials_used(trials) {}
     };
 
-    // Masking parameters
     struct MaskingParams {
-        size_t lambda;           // Security parameter
-        size_t overhead_bits;    // Masking overhead L
-        double abort_prob;       // Target abort probability
-        Fr bound;               // Upper bound for masking range
+        size_t lambda;
+        size_t overhead_bits;
+        double target_abort_prob;
+        Fr max_challenge;
+        Fr range_bound;
+        Fr hiding_parameter;
         
-        MaskingParams(size_t _lambda = 128, size_t _overhead = 40) 
-            : lambda(_lambda), overhead_bits(_overhead) {
-            abort_prob = 1.0 / (1 << overhead_bits);  // 2^(-L)
-            Fr temp;
-            Fr::pow(temp, Fr(2), lambda + overhead_bits);
-            bound = temp - Fr(1);
+        MaskingParams(size_t _lambda = 128, size_t _overhead = 40, 
+                     const Fr& _gamma = Fr(41), const Fr& _B = Fr(64)) 
+            : lambda(_lambda), overhead_bits(_overhead), max_challenge(_gamma), range_bound(_B) {
+            target_abort_prob = pow(2.0, -static_cast<double>(overhead_bits));
+            // Use BLS12-381 scalar field maximum value for field compliance
+            hiding_parameter.setStr("52435875175126190479447740508185965837690552500527637822603658699938581184512");
         }
     };
-    
-    // Main masking functions
-    static MaskResult<Fr> mask_value(const Fr& value, const Fr& randomness, 
-                                    const MaskingParams& params);
-    static MaskResult<Fr> mask_opening(const Fr& opening, const Fr& randomness,
-                                      const MaskingParams& params);
-    
-    // Batch masking for efficiency
-    static vector<MaskResult<Fr>> mask_batch_values(const vector<Fr>& values,
-                                                   const vector<Fr>& randomness,
-                                                   const MaskingParams& params);
-    
-    // Randomness generation
-    static Fr generate_masking_randomness(const MaskingParams& params);
-    static vector<Fr> generate_batch_randomness(size_t count, const MaskingParams& params);
-    
-    // Rejection sampling
-    static optional<Fr> rejection_sample(const Fr& center, const Fr& bound,
-                                        const MaskingParams& params);
-    static bool should_accept(const Fr& sample, const Fr& center, const Fr& bound);
-    
-    // Statistical distance computation
-    static double compute_statistical_distance(const MaskingParams& params);
-    static bool verify_masking_security(const MaskingParams& params, double epsilon = 2e-40);
-    
-    // Utility functions
-    static Fr compute_masking_bound(const Fr& max_value, const MaskingParams& params);
-    static size_t estimate_rejection_rate(const MaskingParams& params);
-    
+
 private:
     static mt19937_64 rng;
-    static void seed_rng();
-    static Fr uniform_random(const Fr& bound);
-    static bool geometric_test(double probability);
+    static bool initialized;
+    static void ensure_initialized();
+
+public:
+    static MaskResult<Fr> mask_value(const Fr& value, const Fr& challenge, 
+                                    const Fr& mask_randomness, const MaskingParams& params);
+    static MaskResult<Fr> mask_opening_randomness(const Fr& randomness, const Fr& challenge,
+                                                 const Fr& mask_randomness, const MaskingParams& params);
+    static optional<MaskResult<Fr>> uniform_rejection_sample(const Fr& bound, const MaskingParams& params);
+    static double compute_statistical_distance(const MaskingParams& params);
+    static Fr compute_masking_bound(const MaskingParams& params);
+    static vector<MaskResult<Fr>> mask_batch_values(const vector<Fr>& values, const vector<Fr>& challenges,
+                                                   const vector<Fr>& mask_randomness, const MaskingParams& params);
+    static bool verify_masking_security(const MaskingParams& params, double max_distance = 2e-40);
+    static bool validate_sharpgs_compliance(const MaskingParams& params);
+    static Fr generate_masking_randomness(const MaskingParams& params);
 };
 
-/**
- * Range-specific masking for SharpGS protocol values
- */
 class RangeMasking {
 public:
-    // Protocol-specific parameters
     struct ProtocolParams {
-        Fr B;                    // Range bound
-        Fr Gamma;               // Challenge space size
-        size_t R;               // Number of repetitions
-        Fr S;                   // Hiding parameter (typically 2^256 - 1)
+        Fr B, Gamma;
+        size_t R;
+        Fr S;
         
-        ProtocolParams(const Fr& _B, const Fr& _Gamma, size_t _R) 
+        ProtocolParams(const Fr& _B = Fr(64), const Fr& _Gamma = Fr(41), size_t _R = 1)
             : B(_B), Gamma(_Gamma), R(_R) {
-            Fr temp;
-            Fr::pow(temp, Fr(2), 256);
-            S = temp - Fr(1);
+            // Use BLS12-381 scalar field maximum value
+            S.setStr("52435875175126190479447740508185965837690552500527637822603658699938581184512");
         }
     };
     
-    // Mask values in range [0, B*Gamma]
-    static Masking::MaskResult<Fr> mask_range_value(const Fr& x, const Fr& randomness,
-                                                   const ProtocolParams& protocol,
-                                                   const Masking::MaskingParams& masking);
-    
-    // Mask opening randomness in range [0, S*Gamma]  
-    static Masking::MaskResult<Fr> mask_opening_randomness(const Fr& r, const Fr& randomness,
-                                                          const ProtocolParams& protocol,
-                                                          const Masking::MaskingParams& masking);
-    
-    // Compute masking bounds for protocol
-    static Fr compute_value_bound(const ProtocolParams& protocol, 
-                                 const Masking::MaskingParams& masking);
-    static Fr compute_opening_bound(const ProtocolParams& protocol,
-                                   const Masking::MaskingParams& masking);
-    
-    // Batch operations for Sigma-protocol
-    static vector<Masking::MaskResult<Fr>> mask_witness_batch(
-        const vector<Fr>& witnesses, const vector<Fr>& challenges,
-        const vector<Fr>& randomness, const ProtocolParams& protocol,
-        const Masking::MaskingParams& masking);
-    
-    // Verification functions
-    static bool verify_masked_range(const Fr& masked_value, 
-                                   const ProtocolParams& protocol,
-                                   const Masking::MaskingParams& masking);
-    static bool verify_all_in_range(const vector<Fr>& masked_values,
-                                   const ProtocolParams& protocol,
-                                   const Masking::MaskingParams& masking);
-};
-
-/**
- * Security analysis tools for masking parameters
- */
-class MaskingSecurity {
-public:
-    // Compute exact abort probability
-    static double compute_abort_probability(const Masking::MaskingParams& params);
-    
-    // Compute expected number of trials
-    static double compute_expected_trials(const Masking::MaskingParams& params);
-    
-    // Optimize parameters for target security level
-    static Masking::MaskingParams optimize_parameters(size_t security_bits, 
-                                                     double max_abort_prob = 0.5);
-    
-    // Security proofs verification
-    static bool verify_statistical_hiding(const Masking::MaskingParams& params, 
-                                         double epsilon = 1e-40);
-    static bool verify_soundness_preservation(const Masking::MaskingParams& params,
-                                             const RangeMasking::ProtocolParams& protocol);
-    
-    // Parameter recommendations
-    static void print_parameter_analysis(const Masking::MaskingParams& masking,
-                                        const RangeMasking::ProtocolParams& protocol);
-    static Masking::MaskingParams get_recommended_params(size_t lambda = 128);
+    static Masking::MaskResult<Fr> mask_witness(const Fr& witness, const Fr& challenge,
+                                               const ProtocolParams& protocol,
+                                               const Masking::MaskingParams& masking);
+    static bool validate_protocol_security(const ProtocolParams& protocol,
+                                          const Masking::MaskingParams& masking);
 };
