@@ -1,4 +1,4 @@
-// src/pedersen.cpp - FIXED for MCL API compatibility
+// src/pedersen.cpp - Fixed for SharpGS Algorithm 1 compliance
 #include "pedersen.h"
 #include <random>
 #include <stdexcept>
@@ -10,15 +10,57 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
     ck.generators.resize(N + 1);
     
     for (size_t i = 0; i <= N; i++) {
-        // Create deterministic but cryptographically independent generators
         std::string seed = "SharpGS_generator_" + std::to_string(i);
-        
-        // Use MCL's hash-to-curve function (available in your version)
         hashAndMapToG1(ck.generators[i], seed.c_str(), seed.length());
         
-        // Verify the generator is valid
         if (ck.generators[i].isZero() || !ck.generators[i].isValid()) {
             throw std::runtime_error("Failed to generate valid generator " + std::to_string(i));
+        }
+    }
+    
+    return ck;
+}
+
+PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_three_squares(size_t N) {
+    CommitmentKey ck;
+    ck.max_values = N * 3;  // Each value has 3 squares
+    ck.generators.resize(1 + N * 3);  // G0 + Gi,j for i=1..N, j=1..3
+    
+    // G0 generator
+    std::string seed = "SharpGS_3sq_G0";
+    hashAndMapToG1(ck.generators[0], seed.c_str(), seed.length());
+    
+    // Gi,j generators for i=1..N, j=1..3
+    for (size_t i = 1; i <= N; i++) {
+        for (size_t j = 1; j <= 3; j++) {
+            size_t idx = 1 + (i-1)*3 + (j-1);  // Index: 1, 2, 3, 4, 5, 6, ...
+            std::string gen_seed = "SharpGS_3sq_G" + std::to_string(i) + "_" + std::to_string(j);
+            hashAndMapToG1(ck.generators[idx], gen_seed.c_str(), gen_seed.length());
+            
+            if (ck.generators[idx].isZero() || !ck.generators[idx].isValid()) {
+                throw std::runtime_error("Failed to generate valid Gi,j generator " + std::to_string(i) + "," + std::to_string(j));
+            }
+        }
+    }
+    
+    if (ck.generators[0].isZero() || !ck.generators[0].isValid()) {
+        throw std::runtime_error("Failed to generate valid G0 generator");
+    }
+    
+    return ck;
+}
+
+PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_independent(size_t N, const string& seed_prefix) {
+    CommitmentKey ck;
+    ck.max_values = N;
+    ck.generators.resize(N + 1);  // H0, H1, ..., HN
+    
+    for (size_t i = 0; i <= N; i++) {
+        std::string seed = seed_prefix + "_H" + std::to_string(i);
+        hashAndMapToG1(ck.generators[i], seed.c_str(), seed.length());
+        
+        if (ck.generators[i].isZero() || !ck.generators[i].isValid()) {
+            throw std::runtime_error("Failed to generate valid H" + std::to_string(i) + " generator");
         }
     }
     
