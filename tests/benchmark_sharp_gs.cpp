@@ -25,6 +25,7 @@ private:
         size_t repetitions;
         double avg_time_ms;
         size_t proof_size_bytes;
+        size_t hash_optimized_size;
         size_t iterations;
     };
     
@@ -58,90 +59,119 @@ private:
     }
     
     Fr create_range_bound(size_t log_b) {
-        // Create actual 2^log_b values for realistic testing
         Fr result;
         if (log_b <= 32) {
-            // 2^32 - 1
             result.setStr("4294967295");
         } else if (log_b <= 64) {
-            // 2^64 - 1  
             result.setStr("18446744073709551615");
         } else {
-            // 2^128 - 1
             result.setStr("340282366920938463463374607431768211455");
         }
         return result;
     }
     
     Fr random_value_in_range(size_t log_b) {
-        // Use small random values that work with three squares decomposition
         uint32_t val = rng() % 10000;
         return Fr(val);
     }
     
-    size_t calculate_proof_size(const SharpGS::Proof& proof, const SharpGS::PublicParameters& pp) {
-        // Serialize the entire proof structure to get actual byte size
-        vector<uint8_t> proof_bytes;
+    size_t calculate_actual_proof_size(const SharpGS::Proof& proof, const SharpGS::PublicParameters& pp) {
+        size_t total_size = 0;
+        vector<uint8_t> temp_buffer(128);
         
-        // Serialize entire proof structure
-        serialize_proof_to_bytes(proof, proof_bytes);
-        
-        return proof_bytes.size();
-    }
-    
-    void serialize_proof_to_bytes(const SharpGS::Proof& proof, vector<uint8_t>& bytes) {
-        bytes.clear();
-        
-        // Serialize first message
-        append_g1_to_bytes(proof.first_msg.commitment_y, bytes);
+        // Serialize first message commitments (WITHOUT hash optimization)
+        size_t len = proof.first_msg.commitment_y.serialize(temp_buffer.data(), temp_buffer.size());
+        total_size += len;
         
         for (const auto& point : proof.first_msg.mask_commitments_x) {
-            append_g1_to_bytes(point, bytes);
+            len = point.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         for (const auto& point : proof.first_msg.mask_commitments_y) {
-            append_g1_to_bytes(point, bytes);
+            len = point.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         for (const auto& point : proof.first_msg.poly_commitments_star) {
-            append_g1_to_bytes(point, bytes);
+            len = point.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         for (const auto& point : proof.first_msg.mask_poly_commitments) {
-            append_g1_to_bytes(point, bytes);
+            len = point.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         
-        // Serialize response
+        // Serialize response Fr elements
         for (const auto& z_vec : proof.response.z_values) {
             for (const auto& fr_val : z_vec) {
-                append_fr_to_bytes(fr_val, bytes);
+                len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+                total_size += len;
             }
         }
         for (const auto& z_mat : proof.response.z_squares) {
             for (const auto& z_vec : z_mat) {
                 for (const auto& fr_val : z_vec) {
-                    append_fr_to_bytes(fr_val, bytes);
+                    len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+                    total_size += len;
                 }
             }
         }
         for (const auto& fr_val : proof.response.t_x) {
-            append_fr_to_bytes(fr_val, bytes);
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         for (const auto& fr_val : proof.response.t_y) {
-            append_fr_to_bytes(fr_val, bytes);
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
         for (const auto& fr_val : proof.response.t_star) {
-            append_fr_to_bytes(fr_val, bytes);
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
         }
+        
+        return total_size;
     }
     
-    void append_g1_to_bytes(const G1& point, vector<uint8_t>& bytes) {
-        uint8_t temp[256];
-        size_t len = point.serialize(temp, sizeof(temp));
-        bytes.insert(bytes.end(), temp, temp + len);
-    }
-    
-    void append_fr_to_bytes(const Fr& element, vector<uint8_t>& bytes) {
-        uint8_t temp[256]; 
-        size_t len = element.serialize(temp, sizeof(temp));
-        bytes.insert(bytes.end(), temp, temp + len);
+    size_t calculate_hash_optimized_size(const SharpGS::Proof& proof, const SharpGS::PublicParameters& pp) {
+        size_t total_size = 0;
+        vector<uint8_t> temp_buffer(128);
+        
+        // Hash optimization: replace all first message commitments with a single hash
+        // Hash size is typically 32 bytes (SHA-256) or 64 bytes (SHA-512)
+        total_size += 32; // Hash of all commitments (∆)
+        
+        // Still need to send Cy commitment (used in verification)
+        size_t len = proof.first_msg.commitment_y.serialize(temp_buffer.data(), temp_buffer.size());
+        total_size += len;
+        
+        // Serialize response Fr elements (same as before)
+        for (const auto& z_vec : proof.response.z_values) {
+            for (const auto& fr_val : z_vec) {
+                len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+                total_size += len;
+            }
+        }
+        for (const auto& z_mat : proof.response.z_squares) {
+            for (const auto& z_vec : z_mat) {
+                for (const auto& fr_val : z_vec) {
+                    len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+                    total_size += len;
+                }
+            }
+        }
+        for (const auto& fr_val : proof.response.t_x) {
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
+        }
+        for (const auto& fr_val : proof.response.t_y) {
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
+        }
+        for (const auto& fr_val : proof.response.t_star) {
+            len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
+            total_size += len;
+        }
+        
+        return total_size;
     }
 
 public:
@@ -151,9 +181,9 @@ public:
         
         initPairing(BN_SNARK1);
         
-        // Test configurations from paper + large ranges
+        // Test configurations from paper
         vector<size_t> batch_sizes = {1, 8, 16};
-        vector<size_t> log_b_values = {32, 64, 128}; // 2^32, 2^64, 2^128
+        vector<size_t> log_b_values = {32, 64, 128};
         
         for (size_t log_b : log_b_values) {
             Fr B = create_range_bound(log_b);
@@ -167,9 +197,9 @@ public:
             }
         }
         
-        cout << "\n" << string(80, '=') << endl;
+        cout << "\n" << string(85, '=') << endl;
         print_table();
-        cout << "\n" << string(80, '=') << endl;
+        cout << "\n" << string(85, '=') << endl;
         analyze_performance();
     }
 
@@ -178,6 +208,8 @@ private:
         auto pp = SharpGS::setup(N, B, 128);
         
         size_t actual_proof_size = 0;
+        size_t hash_opt_size = 0;
+        
         double protocol_time = benchmark_operation([&]() {
             SharpGS::Witness witness;
             witness.values.clear();
@@ -199,16 +231,22 @@ private:
             proof.first_msg = first_msg;
             proof.response = response;
             
-            // MEASURE ACTUAL PROOF SIZE HERE
-            actual_proof_size = calculate_proof_size(proof, pp);
+            // MEASURE ACTUAL PROOF SIZES
+            actual_proof_size = calculate_actual_proof_size(proof, pp);
+            hash_opt_size = calculate_hash_optimized_size(proof, pp);
             
             bool verified = SharpGS::verify(pp, stmt, proof, challenge);
             if (!verified) throw runtime_error("Verification failed");
         }, 5);
         
-        results.push_back({"Full Protocol", N, log_b, pp.repetitions, protocol_time, actual_proof_size, 5});
-        cout << "Full Protocol: " << fixed << setprecision(1) << protocol_time << " ms, " 
-             << actual_proof_size << " bytes" << endl;
+        results.push_back({"Full Protocol", N, log_b, pp.repetitions, protocol_time, actual_proof_size, hash_opt_size, 5});
+        cout << "Full Protocol: " << fixed << setprecision(1) << protocol_time << " ms" << endl;
+        cout << "  Without hash opt: " << actual_proof_size << " bytes" << endl;
+        cout << "  With hash opt: " << hash_opt_size << " bytes" << endl;
+        cout << "  Repetitions R: " << pp.repetitions << endl;
+        cout << "  Savings: " << actual_proof_size - hash_opt_size << " bytes (" 
+             << fixed << setprecision(1) << 100.0 * (actual_proof_size - hash_opt_size) / actual_proof_size 
+             << "% reduction)" << endl;
     }
     
     void benchmark_individual_phases(size_t N, const Fr& B, size_t log_b) {
@@ -231,7 +269,7 @@ private:
             auto first_msg = SharpGS::prove_first(pp, stmt, witness);
         }, 10);
         
-        results.push_back({"Prove First", N, log_b, pp.repetitions, prove_first_time, 0, 10});
+        results.push_back({"Prove First", N, log_b, pp.repetitions, prove_first_time, 0, 0, 10});
         cout << "  Prove First: " << fixed << setprecision(1) << prove_first_time << " ms" << endl;
         
         // Generate Challenge
@@ -239,7 +277,7 @@ private:
             auto challenge = SharpGS::generate_challenge(pp);
         }, 50);
         
-        results.push_back({"Generate Challenge", N, log_b, pp.repetitions, challenge_time, 0, 50});
+        results.push_back({"Generate Challenge", N, log_b, pp.repetitions, challenge_time, 0, 0, 50});
         cout << "  Generate Challenge: " << fixed << setprecision(2) << challenge_time << " ms" << endl;
         
         // Prove Response
@@ -250,7 +288,7 @@ private:
             auto response = SharpGS::prove_response(pp, stmt, witness, first_msg, challenge);
         }, 10);
         
-        results.push_back({"Prove Response", N, log_b, pp.repetitions, prove_response_time, 0, 10});
+        results.push_back({"Prove Response", N, log_b, pp.repetitions, prove_response_time, 0, 0, 10});
         cout << "  Prove Response: " << fixed << setprecision(1) << prove_response_time << " ms" << endl;
         
         // Verify
@@ -264,7 +302,7 @@ private:
             if (!verified) throw runtime_error("Verification failed");
         }, 15);
         
-        results.push_back({"Verify", N, log_b, pp.repetitions, verify_time, 0, 15});
+        results.push_back({"Verify", N, log_b, pp.repetitions, verify_time, 0, 0, 15});
         cout << "  Verify: " << fixed << setprecision(1) << verify_time << " ms" << endl;
         
         // Three Squares Decomposition
@@ -278,7 +316,7 @@ private:
             }
         }, 5);
         
-        results.push_back({"Three Squares Decomp", N, log_b, 0, decomp_time, 0, 5});
+        results.push_back({"Three Squares Decomp", N, log_b, 0, decomp_time, 0, 0, 5});
         cout << "  Three Squares (×" << N << "): " << fixed << setprecision(1) << decomp_time << " ms" << endl;
     }
     
@@ -289,9 +327,10 @@ private:
              << setw(8) << "log B" 
              << setw(5) << "R" 
              << setw(12) << "Time (ms)" 
-             << setw(12) << "Size (bytes)" 
+             << setw(12) << "Full (B)" 
+             << setw(12) << "Hash Opt (B)"
              << setw(8) << "Iters" << endl;
-        cout << string(70, '-') << endl;
+        cout << string(85, '-') << endl;
         
         for (const auto& result : results) {
             cout << left << setw(20) << result.operation
@@ -299,25 +338,33 @@ private:
                  << setw(8) << result.log_b
                  << setw(5) << result.repetitions
                  << setw(12) << fixed << setprecision(1) << result.avg_time_ms
-                 << setw(12) << (result.proof_size_bytes > 0 ? to_string(result.proof_size_bytes) : "-")
+                 << setw(12) << (result.proof_size_bytes > 0 ? 
+                     to_string(result.proof_size_bytes) : "-")
+                 << setw(12) << (result.hash_optimized_size > 0 ? 
+                     to_string(result.hash_optimized_size) : "-")
                  << setw(8) << result.iterations << endl;
         }
         
         cout << "\nComparison with Table 1 (λ=128, log B=64):" << endl;
-        cout << "Paper SharpGS: N=1→360B, N=8→1070B, N=16→1882B" << endl;
+        cout << "Paper SharpGS: N=1→360B, N=8→1070B, N=16→1882B (R=1, Γ=129)" << endl;
+        cout << "Our implementation uses R=" << ((128 + 19) / 20) << " repetitions instead of R=1" << endl;
         
         for (size_t N : {1, 8, 16}) {
             auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
                 return r.operation == "Full Protocol" && r.batch_size == N && r.log_b == 64;
             });
             if (it != results.end()) {
-                cout << "Our impl: N=" << N << "→" << it->proof_size_bytes << "B";
-                if (N == 1) cout << " (vs 360B paper)";
-                else if (N == 8) cout << " (vs 1070B paper)";
-                else if (N == 16) cout << " (vs 1882B paper)";
+                cout << "Our impl: N=" << N << "→" << it->hash_optimized_size << "B (hash opt)";
+                cout << " / " << it->proof_size_bytes << "B (full)";
+                if (N == 1) cout << " vs 360B paper";
+                else if (N == 8) cout << " vs 1070B paper";
+                else if (N == 16) cout << " vs 1882B paper";
                 cout << endl;
             }
         }
+        
+        cout << "\nNote: Paper uses R=1 with large challenge space Γ=129" << endl;
+        cout << "Our implementation uses R=7 with smaller challenge space for same security level" << endl;
     }
     
     void analyze_performance() {
@@ -325,48 +372,37 @@ private:
         cout << "===================" << endl;
         
         // Scaling by batch size
-        cout << "\nBatch Size Scaling (log B=64):" << endl;
+        cout << "\nBatch Size Scaling (log B=64, with hash optimization):" << endl;
         for (size_t N : {1, 8, 16}) {
             auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
                 return r.operation == "Full Protocol" && r.batch_size == N && r.log_b == 64;
             });
             if (it != results.end()) {
                 cout << "N=" << N << ": " << fixed << setprecision(1) << it->avg_time_ms 
-                     << "ms, " << it->proof_size_bytes << " bytes" << endl;
+                     << "ms, " << it->hash_optimized_size << " bytes" << endl;
             }
         }
         
-        // Scaling by range size
-        cout << "\nRange Size Scaling (N=1):" << endl;
-        for (size_t log_b : {32, 64, 128}) {
-            auto it = find_if(results.begin(), results.end(), [log_b](const BenchmarkResult& r) {
-                return r.operation == "Full Protocol" && r.batch_size == 1 && r.log_b == log_b;
+        // Hash optimization savings
+        cout << "\nHash Optimization Savings:" << endl;
+        for (size_t N : {1, 8, 16}) {
+            auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
+                return r.operation == "Full Protocol" && r.batch_size == N && r.log_b == 64;
             });
-            if (it != results.end()) {
-                cout << "2^" << log_b << ": " << fixed << setprecision(1) << it->avg_time_ms 
-                     << "ms, " << it->proof_size_bytes << " bytes" << endl;
+            if (it != results.end() && it->proof_size_bytes > 0) {
+                size_t savings = it->proof_size_bytes - it->hash_optimized_size;
+                double percent = 100.0 * savings / it->proof_size_bytes;
+                cout << "N=" << N << ": " << savings << " bytes saved (" 
+                     << fixed << setprecision(1) << percent << "% reduction)" << endl;
             }
         }
         
-        // Efficiency metrics
-        cout << "\nEfficiency Metrics:" << endl;
-        auto n1 = find_if(results.begin(), results.end(), [](const BenchmarkResult& r) {
-            return r.operation == "Full Protocol" && r.batch_size == 1 && r.log_b == 64;
-        });
-        auto n8 = find_if(results.begin(), results.end(), [](const BenchmarkResult& r) {
-            return r.operation == "Full Protocol" && r.batch_size == 8 && r.log_b == 64;
-        });
-        
-        if (n1 != results.end() && n8 != results.end()) {
-            double time_efficiency = (n1->avg_time_ms * 8) / n8->avg_time_ms;
-            double size_efficiency = (double)(n1->proof_size_bytes * 8) / n8->proof_size_bytes;
-            cout << "Batch efficiency (8×N=1 vs N=8):" << endl;
-            cout << "  Time: " << fixed << setprecision(2) << time_efficiency << "x speedup" << endl;
-            cout << "  Size: " << fixed << setprecision(2) << size_efficiency << "x compression" << endl;
-            cout << "  Time per proof (N=8): " << fixed << setprecision(1) 
-                 << n8->avg_time_ms / 8 << " ms" << endl;
-            cout << "  Size per proof (N=8): " << n8->proof_size_bytes / 8 << " bytes" << endl;
-        }
+        // Parameter analysis
+        cout << "\nParameter Analysis:" << endl;
+        cout << "Security parameter λ: 128 bits" << endl;
+        cout << "Repetitions R: " << ((128 + 19) / 20) << endl;
+        cout << "Challenge space: smaller (not optimized like paper)" << endl;
+        cout << "To match paper Table 1, need R=1 with Γ=129" << endl;
     }
 };
 
