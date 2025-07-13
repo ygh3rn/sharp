@@ -9,11 +9,11 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
     ck.generators.resize(N + 1);
     
     for (size_t i = 0; i <= N; i++) {
-        std::string seed = "SharpGS_generator_" + std::to_string(i);
+        string seed = "SharpGS_generator_" + to_string(i);
         hashAndMapToG1(ck.generators[i], seed.c_str(), seed.length());
         
         if (ck.generators[i].isZero() || !ck.generators[i].isValid()) {
-            throw std::runtime_error("Failed to generate valid generator " + std::to_string(i));
+            throw runtime_error("Failed to generate valid generator " + to_string(i));
         }
     }
     
@@ -26,12 +26,12 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_combined(s
     ck.generators.resize(1 + N + N*3);
     
     // G0 generator
-    std::string seed = "SharpGS_combined_G0";
+    string seed = "SharpGS_combined_G0";
     hashAndMapToG1(ck.generators[0], seed.c_str(), seed.length());
     
     // G1, G2, ..., GN generators
     for (size_t i = 1; i <= N; i++) {
-        std::string gen_seed = "SharpGS_combined_G" + std::to_string(i);
+        string gen_seed = "SharpGS_combined_G" + to_string(i);
         hashAndMapToG1(ck.generators[i], gen_seed.c_str(), gen_seed.length());
     }
     
@@ -39,17 +39,17 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_combined(s
     for (size_t i = 1; i <= N; i++) {
         for (size_t j = 1; j <= 3; j++) {
             size_t idx = N + 1 + (i-1)*3 + (j-1);
-            std::string gen_seed = "SharpGS_combined_G" + std::to_string(i) + "_" + std::to_string(j);
+            string gen_seed = "SharpGS_combined_G" + to_string(i) + "_" + to_string(j);
             hashAndMapToG1(ck.generators[idx], gen_seed.c_str(), gen_seed.length());
             
             if (ck.generators[idx].isZero() || !ck.generators[idx].isValid()) {
-                throw std::runtime_error("Failed to generate valid Gi,j generator " + std::to_string(i) + "," + std::to_string(j));
+                throw runtime_error("Failed to generate valid Gi,j generator " + to_string(i) + "," + to_string(j));
             }
         }
     }
     
     if (ck.generators[0].isZero() || !ck.generators[0].isValid()) {
-        throw std::runtime_error("Failed to generate valid G0 generator");
+        throw runtime_error("Failed to generate valid G0 generator");
     }
     
     return ck;
@@ -61,11 +61,11 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_independen
     ck.generators.resize(N + 1);
     
     for (size_t i = 0; i <= N; i++) {
-        std::string seed = seed_prefix + "_H" + std::to_string(i);
+        string seed = seed_prefix + "_H" + to_string(i);
         hashAndMapToG1(ck.generators[i], seed.c_str(), seed.length());
         
         if (ck.generators[i].isZero() || !ck.generators[i].isValid()) {
-            throw std::runtime_error("Failed to generate valid H" + std::to_string(i) + " generator");
+            throw runtime_error("Failed to generate valid H" + to_string(i) + " generator");
         }
     }
     
@@ -74,11 +74,11 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_independen
 
 PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
     const CommitmentKey& ck, 
-    const std::vector<Fr>& values, 
+    const vector<Fr>& values, 
     const Fr& randomness) {
     
     if (values.size() > ck.max_values) {
-        throw std::invalid_argument("Too many values for commitment key");
+        throw invalid_argument("Too many values for commitment key");
     }
     
     Commitment comm;
@@ -97,12 +97,12 @@ PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
 
 PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit_with_offset(
     const CommitmentKey& ck, 
-    const std::vector<Fr>& values, 
+    const vector<Fr>& values, 
     const Fr& randomness,
     size_t generator_offset) {
     
     if (generator_offset + values.size() >= ck.generators.size()) {
-        throw std::invalid_argument("Generator offset too large for commitment key");
+        throw invalid_argument("Generator offset too large for commitment key");
     }
     
     Commitment comm;
@@ -121,7 +121,7 @@ PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit_with_offset(
 
 PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
     const CommitmentKey& ck, 
-    const std::vector<Fr>& values) {
+    const vector<Fr>& values) {
     
     Fr randomness;
     randomness.setByCSPRNG();
@@ -131,7 +131,7 @@ PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
 bool PedersenMultiCommitment::verify(
     const CommitmentKey& ck,
     const Commitment& comm,
-    const std::vector<Fr>& values,
+    const vector<Fr>& values,
     const Fr& randomness) {
     
     Commitment expected = commit(ck, values, randomness);

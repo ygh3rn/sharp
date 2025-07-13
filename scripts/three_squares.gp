@@ -58,24 +58,3 @@ threesquares(n) =
     
     return([]);
 }
-
-{
-compute_decomposition(value) =
-    local(result);
-    result = threesquares(value);
-    if(#result == 0,
-        print("Error: Cannot compute three squares decomposition for ", value);
-        return([0, 0, 0])
-    );
-    return(result);
-}
-
-/* Main function for external calls */
-{
-main() =
-    local(n, result);
-    read("input.tmp");
-    result = compute_decomposition(n);
-    write("output.tmp", result[1], " ", result[2], " ", result[3]);
-    quit;
-}
