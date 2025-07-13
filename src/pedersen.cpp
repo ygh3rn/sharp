@@ -1,56 +1,25 @@
+// src/pedersen.cpp - FIXED for MCL API compatibility
 #include "pedersen.h"
 #include <random>
 #include <stdexcept>
-#include <iostream>
 #include <string>
-#include <vector>
 
 PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) {
     CommitmentKey ck;
     ck.max_values = N;
-    ck.generators.resize(N + 1);  // G0 for randomness, G1...GN for values
+    ck.generators.resize(N + 1);
     
-    // Simple approach: try to use the fact that MCL might have a default generator
-    try {
-        // Create generators using a very simple method
-        for (size_t i = 0; i <= N; i++) {
-            // Try to create a valid generator by clearing and then using string parsing
-            ck.generators[i].clear();
-            
-            // Try different approaches based on index
-            if (i == 0) {
-                // For the first generator, try a known point representation
-                // BN_SNARK1 generator coordinates (these are example coordinates)
-                bool success = false;
-                
-                // Try various valid point representations
-                vector<string> test_points = {
-                    "1 1 2",  // Jacobian
-                    "1 0x17f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb 0x08b3f481e3aaa0f1a09e30ed741d8ae4fcf5e095d5d00af600db18cb2c04b3edd03cc744a2888ae40caa232946c5e7e1",
-                    "1 1 1",
-                };
-                
-                for (const auto& point_str : test_points) {
-                    try {
-                        ck.generators[i].setStr(point_str, 16);
-                        success = true;
-                        break;
-                    } catch (...) {
-                        continue;
-                    }
-                }
-                
-                if (!success) {
-                    throw runtime_error("Could not create base generator");
-                }
-            } else {
-                // For other generators, multiply base by different scalars
-                Fr scalar(i + 7);  // Use different scalars
-                G1::mul(ck.generators[i], ck.generators[0], scalar);
-            }
+    for (size_t i = 0; i <= N; i++) {
+        // Create deterministic but cryptographically independent generators
+        std::string seed = "SharpGS_generator_" + std::to_string(i);
+        
+        // Use MCL's hash-to-curve function (available in your version)
+        hashAndMapToG1(ck.generators[i], seed.c_str(), seed.length());
+        
+        // Verify the generator is valid
+        if (ck.generators[i].isZero() || !ck.generators[i].isValid()) {
+            throw std::runtime_error("Failed to generate valid generator " + std::to_string(i));
         }
-    } catch (const exception& e) {
-        throw;
     }
     
     return ck;
@@ -58,11 +27,11 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
 
 PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
     const CommitmentKey& ck, 
-    const vector<Fr>& values, 
+    const std::vector<Fr>& values, 
     const Fr& randomness) {
     
     if (values.size() > ck.max_values) {
-        throw invalid_argument("Too many values for commitment key");
+        throw std::invalid_argument("Too many values for commitment key");
     }
     
     Commitment comm;
@@ -82,7 +51,7 @@ PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
 
 PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
     const CommitmentKey& ck, 
-    const vector<Fr>& values) {
+    const std::vector<Fr>& values) {
     
     Fr randomness;
     randomness.setByCSPRNG();
@@ -92,7 +61,7 @@ PedersenMultiCommitment::Commitment PedersenMultiCommitment::commit(
 bool PedersenMultiCommitment::verify(
     const CommitmentKey& ck,
     const Commitment& comm,
-    const vector<Fr>& values,
+    const std::vector<Fr>& values,
     const Fr& randomness) {
     
     Commitment expected = commit(ck, values, randomness);
