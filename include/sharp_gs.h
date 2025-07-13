@@ -74,13 +74,10 @@ public:
                       const Proof& proof, const Challenge& challenge);
 
     // Public helper functions for testing
-    static Fr compute_f_star(const Fr& z_val, const Fr& gamma, const Fr& B, const vector<Fr>& z_squares);
-    static vector<vector<Fr>> compute_square_decomposition_values(const vector<Fr>& values, const Fr& B);
-    static vector<Fr> generate_mask_values(size_t count, size_t max_bits = 128);
-
-private:
-    // Algorithm 1 helper functions
     static Fr compute_alpha_star_1(const Fr& x_tilde, const Fr& x, const Fr& B, 
                                    const vector<Fr>& y_vals, const vector<Fr>& y_tildes);
     static Fr compute_alpha_star_0(const Fr& x_tilde, const vector<Fr>& y_tildes);
+    static Fr compute_f_star(const Fr& z_val, const Fr& gamma, const Fr& B, const vector<Fr>& z_squares);
+    static vector<vector<Fr>> compute_square_decomposition_values(const vector<Fr>& values, const Fr& B);
+    static vector<Fr> generate_mask_values(size_t count, size_t max_bits = 128);
 };

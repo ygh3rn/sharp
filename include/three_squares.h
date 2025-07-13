@@ -26,16 +26,22 @@ public:
     // Compute 4x(B-x) + 1 for range proof
     static Fr compute_range_value(const Fr& x, const Fr& B);
     
-    // Convert long to Fr
+    // Convert string to Fr (for large numbers)
+    static Fr string_to_fr(const string& str);
+    
+    // Convert Fr to string (for large numbers)
+    static string fr_to_string(const Fr& value);
+    
+    // Convert long to Fr (backward compatibility)
     static Fr long_to_fr(long value);
     
-    // Convert Fr to long (for small values)
+    // Convert Fr to long (backward compatibility - throws for large values)
     static long fr_to_long(const Fr& value);
 
 private:
-    // Call PARI/GP script and parse output
-    static optional<vector<long>> call_pari_gp(long n);
+    // Call PARI/GP script with string input and parse string output
+    static optional<vector<string>> call_pari_gp_string(const string& n_str);
     
-    // Parse PARI/GP output string
-    static optional<vector<long>> parse_gp_output(const string& output);
+    // Parse PARI/GP output string to vector of strings
+    static optional<vector<string>> parse_gp_output_string(const string& output);
 };

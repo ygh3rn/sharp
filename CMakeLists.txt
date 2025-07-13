@@ -40,7 +40,11 @@ set(SOURCES
 add_executable(test_sharp_gs tests/test_sharp_gs.cpp ${SOURCES})
 target_link_libraries(test_sharp_gs ${MCL_LIBRARY})
 
-set_target_properties(test_sharp_gs PROPERTIES
+# Benchmark executable
+add_executable(benchmark_sharp_gs tests/benchmark_sharp_gs.cpp ${SOURCES})
+target_link_libraries(benchmark_sharp_gs ${MCL_LIBRARY})
+
+set_target_properties(test_sharp_gs benchmark_sharp_gs PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
@@ -52,6 +56,13 @@ add_custom_target(run
     DEPENDS test_sharp_gs
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running SharpGS test suite"
+)
+
+add_custom_target(benchmark
+    COMMAND benchmark_sharp_gs
+    DEPENDS benchmark_sharp_gs
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Running SharpGS benchmark suite"
 )
 
 message(STATUS "MCL include directory: ${MCL_INCLUDE_DIR}")
