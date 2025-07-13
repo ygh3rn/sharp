@@ -17,6 +17,14 @@ if(NOT MCL_INCLUDE_DIR OR NOT MCL_LIBRARY)
     message(FATAL_ERROR "MCL library not found. Please install MCL first.")
 endif()
 
+# Check for PARI/GP
+find_program(PARI_GP_EXECUTABLE gp)
+if(NOT PARI_GP_EXECUTABLE)
+    message(WARNING "PARI/GP (gp) not found. Three squares decomposition will not work.")
+else()
+    message(STATUS "Found PARI/GP: ${PARI_GP_EXECUTABLE}")
+endif()
+
 include_directories(${MCL_INCLUDE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -28,6 +36,7 @@ set(SOURCES
     src/sharp_gs.cpp
 )
 
+# Main test executable
 add_executable(test_sharp_gs tests/test_sharp_gs.cpp ${SOURCES})
 target_link_libraries(test_sharp_gs ${MCL_LIBRARY})
 

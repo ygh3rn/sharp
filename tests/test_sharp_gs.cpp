@@ -67,45 +67,30 @@ private:
         bool success = true;
         
         try {
-            cout << "Starting Pedersen commitment test..." << endl;
-            
-            // Test basic commitment
-            cout << "Setting up commitment key..." << endl;
             auto ck = PedersenMultiCommitment::setup(3);
-            cout << "Commitment key setup complete" << endl;
             
             vector<Fr> values = {Fr(10), Fr(20), Fr(30)};
             Fr randomness;
             randomness.setByCSPRNG();
-            cout << "Created test values and randomness" << endl;
             
-            cout << "Creating commitment..." << endl;
             auto commit = PedersenMultiCommitment::commit(ck, values, randomness);
-            cout << "Commitment created successfully" << endl;
-            
-            cout << "Verifying commitment..." << endl;
             bool verified = PedersenMultiCommitment::verify(ck, commit, values, randomness);
-            cout << "Verification result: " << (verified ? "PASS" : "FAIL") << endl;
             
             if (!verified) {
                 success = false;
             }
             
             // Test homomorphic properties
-            cout << "Testing homomorphic properties..." << endl;
             vector<Fr> values2 = {Fr(5), Fr(15), Fr(25)};
             auto commit2 = PedersenMultiCommitment::commit(ck, values2);
             auto sum_commit = PedersenMultiCommitment::add(commit, commit2);
-            cout << "Homomorphic operations completed" << endl;
             
             // Verify homomorphic addition works structurally
             if (sum_commit.value.isZero()) {
-                cout << "WARNING: Sum commitment is zero (unexpected)" << endl;
                 success = false;
             }
             
         } catch (const exception& e) {
-            cout << "Pedersen test error: " << e.what() << endl;
             success = false;
         }
         
@@ -125,9 +110,6 @@ private:
                 if (!verified) {
                     success = false;
                 }
-            } else {
-                cout << "Could not decompose 30 into three squares" << endl;
-                // This is acceptable - not all numbers have 3-square decomposition
             }
             
             // Test range value computation
@@ -141,7 +123,6 @@ private:
             }
             
         } catch (const exception& e) {
-            cout << "Three squares test error: " << e.what() << endl;
             success = false;
         }
         
@@ -183,7 +164,6 @@ private:
             }
             
         } catch (const exception& e) {
-            cout << "SharpGS basic test error: " << e.what() << endl;
             success = false;
         }
         
@@ -225,7 +205,6 @@ private:
             }
             
         } catch (const exception& e) {
-            cout << "SharpGS batch test error: " << e.what() << endl;
             success = false;
         }
         
@@ -271,7 +250,7 @@ private:
             });
             
         } catch (const exception& e) {
-            cout << "Benchmark error: " << e.what() << endl;
+            // Silent error handling
         }
     }
 };

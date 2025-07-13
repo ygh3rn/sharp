@@ -3,6 +3,8 @@
 #include <mcl/bn.hpp>
 #include <vector>
 #include <optional>
+#include <string>
+#include <unistd.h>  // for getpid()
 
 using namespace mcl;
 using namespace std;
@@ -24,13 +26,16 @@ public:
     // Compute 4x(B-x) + 1 for range proof
     static Fr compute_range_value(const Fr& x, const Fr& B);
     
-private:
-    // Call PARI/GP script and parse output
-    static optional<vector<long>> call_pari_gp(long n);
-    
     // Convert long to Fr
     static Fr long_to_fr(long value);
     
     // Convert Fr to long (for small values)
     static long fr_to_long(const Fr& value);
+
+private:
+    // Call PARI/GP script and parse output
+    static optional<vector<long>> call_pari_gp(long n);
+    
+    // Parse PARI/GP output string
+    static optional<vector<long>> parse_gp_output(const string& output);
 };

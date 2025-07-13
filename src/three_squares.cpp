@@ -4,6 +4,7 @@
 #include <sstream>
 #include <fstream>
 #include <stdexcept>
+#include <regex>
 
 optional<ThreeSquares::Decomposition> ThreeSquares::decompose(const Fr& n) {
     // Convert Fr to long for PARI/GP computation
@@ -11,6 +12,16 @@ optional<ThreeSquares::Decomposition> ThreeSquares::decompose(const Fr& n) {
     
     if (n_long < 0) {
         return nullopt;  // Cannot decompose negative numbers
+    }
+    
+    // Special case: 0 = 0² + 0² + 0²
+    if (n_long == 0) {
+        Decomposition decomp;
+        decomp.x = Fr(0);
+        decomp.y = Fr(0);
+        decomp.z = Fr(0);
+        decomp.valid = true;
+        return decomp;
     }
     
     auto result = call_pari_gp(n_long);
@@ -64,18 +75,15 @@ Fr ThreeSquares::compute_range_value(const Fr& x, const Fr& B) {
 }
 
 optional<vector<long>> ThreeSquares::call_pari_gp(long n) {
-    // Create temporary PARI/GP script
-    stringstream script;
-    script << "threesquares(" << n << ")";
-    
-    // Write script to temporary file
-    ofstream script_file("/tmp/threesquares_input.gp");
+    // Create a unique temporary script file
+    string script_path = "/tmp/threesquares_" + to_string(getpid()) + ".gp";
+    ofstream script_file(script_path);
     if (!script_file) {
-        cerr << "Failed to create temporary script file" << endl;
+        cerr << "Failed to create temporary script file: " << script_path << endl;
         return nullopt;
     }
     
-    // Write the threesquares function and call
+    // Write the complete threesquares function
     script_file << R"(
 pl = 10^6;
 default(primelimit, pl);
@@ -93,7 +101,7 @@ twosquares(n) =
         c2 = polcoeff(p, 1);
         
         if(denominator(c1) == 1 && denominator(c2) == 1,
-            return([c1, c2])
+            return([abs(c1), abs(c2)])
         )
     );
     
@@ -104,114 +112,107 @@ twosquares(n) =
 threesquares(n) =
     local(m, z, i, x1, y1, j, fa, g);
     
+    if(n == 0, return([0, 0, 0]));
+    if(n < 0, return([]));
+    
+    \\ Check if n ≡ 7 (mod 8) after removing all factors of 4
     if((n / (4^valuation(n, 4))) % 8 == 7,
         return([])
     );
     
-    for(z = 1, n,
+    \\ Try to find z such that n - z^2 can be written as sum of two squares
+    for(z = 0, floor(sqrt(n)),
         m = n - z^2;
         
-        if(m % 4 == 3, next);
+        if(m == 0, return([0, 0, z]));
+        if(m < 0, break);
         
-        fa = factor(m, pl);
-        g = 1;
-        
-        for(i = 1, #fa~,
-            if(!ispseudoprime(fa[i,1]) || 
-               (fa[i,2] % 2 == 1 && fa[i,1] % 4 == 3),
-                g = 0;
-                break
-            )
-        );
-        
-        if(!g, next);
-        
+        \\ Check if m can be written as sum of two squares
         j = twosquares(m);
         
         if(#j >= 2,
-            x1 = abs(j[1]);
-            y1 = abs(j[2]);
-            return([x1, y1, z])
+            return([j[1], j[2], z])
         );
     );
     
     return([]);
 }
+
+threesquares()" << n << R"()
+quit
 )";
-    script_file << script.str() << endl;
     script_file.close();
     
-    // Execute PARI/GP
-    string command = "gp -q < /tmp/threesquares_input.gp 2>/dev/null";
-    FILE* pipe = popen(command.c_str(), "r");
+    // Execute PARI/GP with the script
+    string full_command = "gp -q < " + script_path + " 2>/dev/null";
+    FILE* pipe = popen(full_command.c_str(), "r");
     if (!pipe) {
-        cerr << "Failed to execute PARI/GP" << endl;
+        cerr << "Failed to execute PARI/GP command: " << full_command << endl;
+        unlink(script_path.c_str());
         return nullopt;
     }
     
     // Read output
     string output;
-    char buffer[128];
+    char buffer[256];
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
         output += buffer;
     }
-    pclose(pipe);
     
-    // Clean up temporary file
-    remove("/tmp/threesquares_input.gp");
+    int exit_code = pclose(pipe);
+    unlink(script_path.c_str());  // Clean up temp file
     
-    // Parse output
-    // Expected format: [x, y, z] or []
+    if (exit_code != 0) {
+        cerr << "PARI/GP execution failed with exit code: " << exit_code << endl;
+        return nullopt;
+    }
+    
+    // Parse output - look for [x, y, z] format
+    return parse_gp_output(output);
+}
+
+optional<vector<long>> ThreeSquares::parse_gp_output(const string& output) {
+    // Look for pattern like [5, 2, 1] or %9 = [5, 2, 1]
+    regex pattern(R"(\[(\d+),\s*(\d+),\s*(\d+)\])");
+    smatch matches;
+    
+    if (regex_search(output, matches, pattern)) {
+        vector<long> result(3);
+        result[0] = stol(matches[1].str());
+        result[1] = stol(matches[2].str());
+        result[2] = stol(matches[3].str());
+        return result;
+    }
+    
+    // Check for empty result []
     if (output.find("[]") != string::npos) {
-        return nullopt;  // No decomposition found
+        return nullopt;  // No decomposition exists
     }
     
-    // Extract numbers from [x, y, z] format
-    size_t start = output.find('[');
-    size_t end = output.find(']');
-    if (start == string::npos || end == string::npos) {
-        return nullopt;
-    }
-    
-    string numbers = output.substr(start + 1, end - start - 1);
-    vector<long> result;
-    
-    stringstream ss(numbers);
-    string token;
-    while (getline(ss, token, ',')) {
-        // Trim whitespace
-        token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
-        token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
-        
-        if (!token.empty()) {
-            result.push_back(stol(token));
-        }
-    }
-    
-    if (result.size() != 3) {
-        return nullopt;
-    }
-    
-    return result;
+    cerr << "Failed to parse PARI/GP output: " << output << endl;
+    return nullopt;
 }
 
 Fr ThreeSquares::long_to_fr(long value) {
-    if (value >= 0) {
-        return Fr(static_cast<int>(value));
-    } else {
-        Fr result(static_cast<int>(-value));
-        Fr::neg(result, result);
-        return result;
+    if (value < 0) {
+        throw invalid_argument("Cannot convert negative value to Fr");
     }
+    
+    // Use direct constructor - MCL Fr supports this
+    return Fr(static_cast<int>(value));
 }
 
 long ThreeSquares::fr_to_long(const Fr& value) {
-    // This is a simplified conversion for small values
-    // In practice, you'd need a more robust conversion
-    string str = value.getStr(10);
+    // Convert Fr to string in base 10, then parse as long
+    char str_buf[256];
+    size_t len = value.getStr(str_buf, sizeof(str_buf), 10);
+    if (len == 0) {
+        throw runtime_error("Failed to convert Fr to string");
+    }
+    
     try {
-        return stol(str);
-    } catch (const exception&) {
-        throw invalid_argument("Fr value too large to convert to long");
+        return stol(string(str_buf, len));
+    } catch (const out_of_range& e) {
+        throw runtime_error("Fr value too large to convert to long: " + string(str_buf, len));
     }
 }

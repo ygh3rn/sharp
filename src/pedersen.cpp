@@ -10,8 +10,6 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
     ck.max_values = N;
     ck.generators.resize(N + 1);  // G0 for randomness, G1...GN for values
     
-    cout << "Setting up Pedersen commitment key for " << N << " values" << endl;
-    
     // Simple approach: try to use the fact that MCL might have a default generator
     try {
         // Create generators using a very simple method
@@ -36,7 +34,6 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
                     try {
                         ck.generators[i].setStr(point_str, 16);
                         success = true;
-                        cout << "Generator 0 created with: " << point_str << endl;
                         break;
                     } catch (...) {
                         continue;
@@ -50,15 +47,12 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup(size_t N) 
                 // For other generators, multiply base by different scalars
                 Fr scalar(i + 7);  // Use different scalars
                 G1::mul(ck.generators[i], ck.generators[0], scalar);
-                cout << "Generator " << i << " created using scalar multiplication" << endl;
             }
         }
     } catch (const exception& e) {
-        cout << "Generator creation failed: " << e.what() << endl;
         throw;
     }
     
-    cout << "Pedersen setup completed successfully" << endl;
     return ck;
 }
 

@@ -35,8 +35,6 @@ SharpGS::FirstMessage SharpGS::prove_first(
     for (size_t i = 0; i < witness.values.size(); i++) {
         for (size_t j = 0; j < 3; j++) {
             y_values.push_back(sq_decomp.decompositions[i][j].x);
-            y_values.push_back(sq_decomp.decompositions[i][j].y);
-            y_values.push_back(sq_decomp.decompositions[i][j].z);
         }
     }
     
@@ -87,8 +85,6 @@ SharpGS::Response SharpGS::prove_response(
     for (size_t i = 0; i < witness.values.size(); i++) {
         for (size_t j = 0; j < 3; j++) {
             y_values.push_back(sq_decomp.decompositions[i][j].x);
-            y_values.push_back(sq_decomp.decompositions[i][j].y);
-            y_values.push_back(sq_decomp.decompositions[i][j].z);
         }
     }
     
@@ -118,7 +114,7 @@ SharpGS::Response SharpGS::prove_response(
         for (size_t i = 0; i < witness.values.size(); i++) {
             response.z_squares[k][i].resize(3);
             for (size_t j = 0; j < 3; j++) {
-                size_t y_idx = i * 9 + j * 3;  // Each square decomp has 3 values (x,y,z)
+                size_t y_idx = i * 3 + j;  // Each value has 3 square components
                 
                 Fr gamma_y;
                 Fr::mul(gamma_y, gamma, y_values[y_idx]);
@@ -217,6 +213,7 @@ bool SharpGS::verify(
     return true;  // Simplified acceptance
 }
 
+// FIXED: Correct implementation of compute_square_decomposition
 SharpGS::SquareDecomposition SharpGS::compute_square_decomposition(
     const vector<Fr>& values, 
     const Fr& B) {
@@ -226,8 +223,6 @@ SharpGS::SquareDecomposition SharpGS::compute_square_decomposition(
     sq_decomp.randomness.setByCSPRNG();
     
     for (size_t i = 0; i < values.size(); i++) {
-        sq_decomp.decompositions[i].resize(3);
-        
         // Compute 4*x_i*(B - x_i) + 1
         Fr range_val = ThreeSquares::compute_range_value(values[i], B);
         
@@ -237,10 +232,33 @@ SharpGS::SquareDecomposition SharpGS::compute_square_decomposition(
             throw runtime_error("Failed to find three squares decomposition for value " + to_string(i));
         }
         
-        // Store the three components of each square
-        for (size_t j = 0; j < 3; j++) {
-            sq_decomp.decompositions[i][j] = *decomp;  // Each "square" is actually the full decomposition
-        }
+        // FIXED: Store the individual square components correctly
+        // Each value has 3 components: x, y, z such that range_val = x² + y² + z²
+        sq_decomp.decompositions[i].resize(3);
+        
+        // Create individual decompositions for each square component
+        ThreeSquares::Decomposition x_comp, y_comp, z_comp;
+        
+        // Store x component (first square: x² + 0² + 0²)
+        x_comp.x = decomp->x;
+        x_comp.y = Fr(0);
+        x_comp.z = Fr(0);
+        x_comp.valid = true;
+        sq_decomp.decompositions[i][0] = x_comp;
+        
+        // Store y component (second square: y² + 0² + 0²)  
+        y_comp.x = decomp->y;
+        y_comp.y = Fr(0);
+        y_comp.z = Fr(0);
+        y_comp.valid = true;
+        sq_decomp.decompositions[i][1] = y_comp;
+        
+        // Store z component (third square: z² + 0² + 0²)
+        z_comp.x = decomp->z;
+        z_comp.y = Fr(0);
+        z_comp.z = Fr(0);
+        z_comp.valid = true;
+        sq_decomp.decompositions[i][2] = z_comp;
     }
     
     return sq_decomp;
