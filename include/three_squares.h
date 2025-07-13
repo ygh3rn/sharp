@@ -2,46 +2,35 @@
 
 #include <mcl/bn.hpp>
 #include <vector>
-#include <string>
+#include <optional>
 
 using namespace mcl;
+using namespace std;
 
 class ThreeSquares {
 public:
     struct Decomposition {
-        Fr x, y, z;
+        Fr x, y, z;  // Three values such that n = x² + y² + z²
         bool valid;
-        
-        Decomposition() : valid(false) {
-            x.clear();
-            y.clear(); 
-            z.clear();
-        }
-        
-        Decomposition(const Fr& x_, const Fr& y_, const Fr& z_) 
-            : x(x_), y(y_), z(z_), valid(true) {}
     };
     
-    // Compute three squares decomposition: n = x² + y² + z²
-    // Uses GP/PARI for computation
-    static Decomposition compute(const Fr& n);
-    
-    // Compute decomposition for SharpGS: 4*xi*(B-xi) + 1 = y1² + y2² + y3²
-    static std::vector<Fr> computeSharpGSDecomposition(const Fr& xi, const Fr& B);
+    // Compute three squares decomposition using PARI/GP
+    // Returns decomposition of n = x² + y² + z² if it exists
+    static optional<Decomposition> decompose(const Fr& n);
     
     // Verify that x² + y² + z² = n
-    static bool verify(const Fr& x, const Fr& y, const Fr& z, const Fr& n);
+    static bool verify(const Decomposition& decomp, const Fr& n);
+    
+    // Compute 4x(B-x) + 1 for range proof
+    static Fr compute_range_value(const Fr& x, const Fr& B);
     
 private:
-    // Call GP/PARI script to compute decomposition
-    static Decomposition callGPScript(long n_val);
-    
-    // Fallback method when GP/PARI is not available
-    static Decomposition computeFallback(long n_val);
-    
-    // Convert Fr to long for GP computation (assumes small values)
-    static long frToLong(const Fr& x);
+    // Call PARI/GP script and parse output
+    static optional<vector<long>> call_pari_gp(long n);
     
     // Convert long to Fr
-    static Fr longToFr(long x);
+    static Fr long_to_fr(long value);
+    
+    // Convert Fr to long (for small values)
+    static long fr_to_long(const Fr& value);
 };

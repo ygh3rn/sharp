@@ -1,73 +1,55 @@
-# SharpGS Implementation
+# SharpGS: Short Relaxed Range Proofs
 
-A C++ implementation of the SharpGS range proof protocol from the research paper "Sharp: Short Relaxed Range Proofs" by Couteau et al.
+A C++ implementation of the SharpGS range proof algorithm from the research paper "Sharp: Short Relaxed Range Proofs" by Couteau, Goudarzi, Klooß, and Reichle.
 
 ## Overview
 
-SharpGS is an efficient range proof protocol that proves knowledge of committed values lying within a specified range [0, B]. The protocol is based on:
+SharpGS is an optimized range proof scheme that allows proving that committed values lie within a specified range [0, B] using square decomposition techniques. Key features include:
 
-- **Three-square decomposition**: Uses the mathematical property that any positive integer can be expressed as the sum of three squares
-- **Pedersen commitments**: For hiding and binding properties
-- **Polynomial masking techniques**: For zero-knowledge guarantees
+- **Group Switching**: Uses different cryptographic groups for commitment and decomposition proof phases
+- **Batching**: Efficient batch proofs for multiple range statements simultaneously  
+- **Square Decomposition**: Based on three-square decomposition instead of binary decomposition
+- **Relaxed Soundness**: Provides relaxed soundness guarantees with significant efficiency improvements
 
 ## Features
 
-- **Efficient range proofs**: Proves x ∈ [0, B] with compact proofs
-- **Batch support**: Multiple range proofs in a single protocol execution
-- **Configurable parameters**: Adjustable security levels and range bounds
-- **MCL library integration**: Uses high-performance elliptic curve operations
-- **GP/PARI integration**: Leverages computer algebra for three-square decompositions
+- ✅ Pedersen multi-commitments with homomorphic properties
+- ✅ Three squares decomposition using PARI/GP integration
+- ✅ Interactive SharpGS protocol implementation
+- ✅ Batch range proofs for multiple values
+- ✅ Comprehensive test suite with benchmarks
+- ✅ Group switching between commitment and proof groups
 
-## Project Structure
+## Prerequisites
 
-```
-sharpgs-implementation/
-├── CMakeLists.txt              # Build configuration
-├── include/
-│   ├── sharpgs.h              # Main SharpGS protocol
-│   ├── commitment.h           # Pedersen commitment schemes
-│   ├── three_squares.h        # Three-square decomposition
-│   └── masking.h              # Masking and rejection sampling
-├── src/
-│   ├── sharpgs.cpp            # SharpGS implementation
-│   ├── commitment.cpp         # Commitment implementation
-│   ├── three_squares.cpp      # Decomposition implementation
-│   └── masking.cpp            # Masking implementation
-├── tests/
-│   └── test_sharpgs.cpp       # Comprehensive test suite
-├── scripts/
-│   └── three_squares.gp       # GP/PARI script for decomposition
-├── README.md                  # This file
-├── LICENSE                    # MIT License
-└── .gitignore                 # Git ignore patterns
+### Required Dependencies
+
+```bash
+# Install MCL cryptographic library
+git clone https://github.com/herumi/mcl.git
+cd mcl && make -j$(nproc) && sudo make install
+
+# Install PARI/GP for three squares decomposition
+sudo apt update
+sudo apt install -y pari-gp
+
+# System requirements
+sudo apt install -y cmake g++ build-essential
 ```
 
-## Dependencies
+### System Requirements
 
-### Required
-- **MCL Library**: Modern cryptographic library for elliptic curves
-  ```bash
-  git clone https://github.com/herumi/mcl.git
-  cd mcl && make -j$(nproc) && sudo make install
-  ```
-
-- **CMake**: Build system (version 3.12+)
-  ```bash
-  sudo apt update && sudo apt install cmake g++
-  ```
-
-### Optional
-- **GP/PARI**: For optimal three-square decomposition
-  ```bash
-  sudo apt install pari-gp
-  ```
+- **Compiler**: GCC 7+ or Clang 6+ with C++17 support
+- **CMake**: Version 3.12 or higher
+- **MCL Library**: For elliptic curve operations
+- **PARI/GP**: For three squares decomposition computation
 
 ## Building
 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd sharpgs-implementation
+cd sharp-gs
 
 # Create build directory
 mkdir build && cd build
@@ -77,7 +59,10 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 
 # Run tests
-./test_sharpgs
+./test_sharp_gs
+
+# Or use the convenience target
+make run
 ```
 
 ## Usage
@@ -85,146 +70,146 @@ make -j$(nproc)
 ### Basic Range Proof
 
 ```cpp
-#include "sharpgs.h"
 #include <mcl/bn.hpp>
+#include "sharp_gs.h"
 
-// Initialize MCL library
+// Initialize pairing
 mcl::initPairing(mcl::BN_SNARK1);
 
-// Set protocol parameters
-SharpGS::Parameters params(
-    1,    // N: number of values
-    64,   // B: range bound [0, 64]
-    128,  // Γ: challenge space
-    1,    // R: repetitions
-    256,  // S: hiding parameter
-    10,   // Lx: masking overhead for values
-    10    // Lr: masking overhead for randomness
-);
+// Setup parameters for range [0, 100]
+Fr B;
+B.setInt(100);
+auto pp = SharpGS::setup(1, B, 128);  // 1 value, range [0,100], 128-bit security
 
-// Create witness (secret values)
-std::vector<mcl::Fr> x_values = {mcl::Fr(42)};  // Value in [0, 64]
-mcl::Fr randomness;
-randomness.setByCSPRNG();
-SharpGS::Witness witness(x_values, randomness);
+// Create witness
+SharpGS::Witness witness;
+witness.values = {Fr(42)};  // Prove that 42 ∈ [0, 100]
+witness.randomness.setByCSPRNG();
 
-// Setup commitment parameters
-auto setup_params = SharpGS::setup(params);
+// Create commitment
+auto commit = PedersenMultiCommitment::commit(pp.ck_com, witness.values, witness.randomness);
+SharpGS::Statement stmt;
+stmt.commitment = commit.value;
+stmt.B = B;
 
-// Create public statement
-auto statement = SharpGS::createStatement(x_values, randomness, params, setup_params);
+// Generate proof
+auto first_msg = SharpGS::prove_first(pp, stmt, witness);
+auto challenge = SharpGS::generate_challenge(pp);
+auto response = SharpGS::prove_response(pp, stmt, witness, first_msg, challenge);
 
-// Execute the protocol
-auto [proof, verification_result] = SharpGS::executeProtocol(witness, statement, params);
+SharpGS::Proof proof;
+proof.first_msg = first_msg;
+proof.response = response;
 
-if (verification_result) {
-    std::cout << "Range proof verified successfully!" << std::endl;
-} else {
-    std::cout << "Range proof verification failed!" << std::endl;
-}
+// Verify proof
+bool verified = SharpGS::verify(pp, stmt, proof, challenge);
 ```
 
-### Batch Range Proofs
+### Batch Range Proof
 
 ```cpp
-// Multiple values in one proof
-SharpGS::Parameters batch_params(4, 32, 64, 1, 256, 10, 10);  // N=4
+// Setup for 4 values
+auto pp = SharpGS::setup(4, B, 128);
 
-std::vector<mcl::Fr> x_values = {
-    mcl::Fr(5), mcl::Fr(10), mcl::Fr(15), mcl::Fr(20)
-};  // All values in [0, 32]
+// Create batch witness
+SharpGS::Witness witness;
+witness.values = {Fr(10), Fr(25), Fr(42), Fr(63)};  // All in [0, 100]
+witness.randomness.setByCSPRNG();
 
 // Rest of the protocol is identical
+// The proof will be more efficient than 4 individual proofs
 ```
 
-## Protocol Details
+## Algorithm Details
 
-### Algorithm Overview
+### SharpGS Protocol
 
-1. **Setup**: Generate Pedersen commitment parameters
-2. **Commitment Phase**: 
-   - Prover commits to values and their three-square decompositions
-   - Creates auxiliary commitments for zero-knowledge
-3. **Challenge Phase**: Verifier sends random challenges
-4. **Response Phase**: 
-   - Prover responds with masked values
-   - Uses rejection sampling for zero-knowledge
-5. **Verification**: Verifier checks all commitments and ranges
+The SharpGS protocol consists of the following phases:
 
-### Security Properties
+1. **Setup**: Generate commitment keys for both groups
+2. **First Message**: 
+   - Compute three-square decomposition: `4x(B-x) + 1 = y₁² + y₂² + y₃²`
+   - Commit to square decomposition values
+   - Generate masked commitments for zero-knowledge
+3. **Challenge**: Verifier sends random challenges γₖ
+4. **Response**: 
+   - Compute masked responses `zₖ,ᵢ = γₖ·xᵢ + x̃ₖ,ᵢ`
+   - Provide polynomial coefficients proving decomposition
+5. **Verification**: Check linear relations and polynomial constraints
 
-- **Completeness**: Honest provers always convince honest verifiers
-- **Relaxed Soundness**: Binds prover to rational values in the target range
-- **Zero-Knowledge**: Simulator can generate indistinguishable transcripts
-- **Configurable Security**: Adjustable parameters for different security levels
+### Three Squares Decomposition
 
-### Three-Square Decomposition
+The implementation uses PARI/GP for computing three squares decomposition:
 
-The protocol relies on expressing `4x(B-x) + 1` as a sum of three squares:
-```
-4x(B-x) + 1 = y₁² + y₂² + y₃²
+```gp
+threesquares(n) = 
+  /* Returns [x, y, z] such that n = x² + y² + z² if possible */
 ```
 
-This decomposition is computed using:
-1. **GP/PARI script** (optimal, when available)
-2. **Fallback method** (simple brute force for small values)
+This is called via process execution and output parsing for integration with C++.
+
+### Group Switching
+
+SharpGS uses two elliptic curve groups:
+- **Gcom**: For value commitments (can be 256-bit for efficiency)
+- **G3sq**: For decomposition proofs (larger group for security requirements)
+
+## Project Structure
+
+```
+include/
+├── sharp_gs.h           # Main SharpGS protocol interface
+├── pedersen.h           # Pedersen multi-commitment scheme
+└── three_squares.h      # Three squares decomposition
+
+src/
+├── sharp_gs.cpp         # SharpGS protocol implementation
+├── pedersen.cpp         # Pedersen commitment implementation
+└── three_squares.cpp    # PARI/GP integration for three squares
+
+tests/
+└── test_sharp_gs.cpp    # Comprehensive test suite
+
+CMakeLists.txt           # Build configuration
+LICENSE                  # MIT license
+README.md               # This file
+.gitignore              # Git ignore rules
+```
 
 ## Performance
 
-Benchmarks on MacBook Pro (2.3 GHz Intel i7):
+Based on the research paper, SharpGS provides significant improvements over Bulletproofs:
 
-| Configuration | Proof Size | Prover Time | Verifier Time |
-|---------------|------------|-------------|---------------|
-| N=1, B=64     | ~400 bytes | ~2.5ms      | ~1.2ms        |
-| N=4, B=32     | ~800 bytes | ~8.1ms      | ~3.8ms        |
-| N=8, B=64     | ~1.2KB     | ~15.4ms     | ~7.2ms        |
+- **Proof Size**: ~34% smaller than CKLR, ~50% smaller than Bulletproofs
+- **Prover Time**: 11-17x faster than Bulletproofs for single proofs
+- **Verifier Time**: 2-4x faster than Bulletproofs
+- **Batch Efficiency**: Excellent scaling for multiple proofs
 
-*Note: These are preliminary benchmarks from an unoptimized implementation.*
+## Security
 
-## Testing
+SharpGS provides **relaxed soundness**, meaning:
+- Honest provers with integer values get standard soundness
+- Malicious provers are bound to rational values in the range
+- Can be upgraded to standard soundness using additional techniques
 
-The test suite includes:
-
-- **Component Tests**: Three-square decomposition, commitments, masking
-- **Protocol Tests**: Basic protocol, multi-value proofs, security properties  
-- **Performance Tests**: Benchmarks for different configurations
-- **Integration Tests**: End-to-end protocol execution
-
-Run tests with:
-```bash
-make run
-# or directly:
-./test_sharpgs
-```
-
-## Configuration Options
-
-### Parameter Tuning
-
-- **N**: Number of values to prove (affects proof size linearly)
-- **B**: Range bound (larger B requires larger field operations)
-- **Γ**: Challenge space (larger Γ improves soundness, increases proof size)
-- **R**: Repetitions (increases security exponentially, proof size linearly)
-- **L**: Masking overhead (affects abort probability and proof size)
-
-### Security vs Efficiency Trade-offs
-
-- **High Security**: R=3, Γ=256, L=40 → ~2KB proofs, high security
-- **Balanced**: R=1, Γ=128, L=10 → ~400B proofs, moderate security  
-- **High Efficiency**: R=1, Γ=64, L=5 → ~200B proofs, lower security
+Security level is determined by:
+- Challenge space size (Γ)
+- Number of repetitions (R)
+- Target security parameter (λ)
 
 ## Limitations
 
-- **Relaxed Soundness**: Binds to rational values, not necessarily integers
-- **Small Ranges**: Optimized for ranges up to 2⁶⁴, larger ranges less efficient
-- **Field Arithmetic**: Requires careful handling of modular arithmetic
-- **GP/PARI Dependency**: Optional but recommended for optimal decomposition
+1. **Relaxed Soundness**: Not suitable for all applications without additional measures
+2. **PARI/GP Dependency**: Requires external process calls for three squares computation
+3. **Implementation Status**: This is a minimal working implementation for research/educational purposes
 
-## References
+## Research Paper
 
-1. **[Sharp Paper]**: Couteau, G., Goudarzi, D., Klooß, M., Reichle, M. "Sharp: Short Relaxed Range Proofs"
-2. **[MCL Library]**: https://github.com/herumi/mcl - High-performance cryptographic library
-3. **[GP/PARI]**: https://pari.math.u-bordeaux.fr/ - Computer algebra system
+This implementation is based on:
+
+**"Sharp: Short Relaxed Range Proofs"**  
+*Geoffroy Couteau, Dahmun Goudarzi, Michael Klooß, Michael Reichle*  
+*October 18, 2024*
 
 ## License
 
@@ -233,12 +218,11 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Contributing
 
 This is a research implementation. For production use, consider:
-
-- **Optimized field arithmetic**: Use MCL's specialized functions
-- **Secure randomness**: Implement proper entropy sources  
-- **Memory safety**: Add bounds checking and secure memory handling
-- **Side-channel resistance**: Implement constant-time operations
+- More robust error handling
+- Optimized field arithmetic
+- Security auditing
+- Extended test coverage
 
 ---
 
-*This implementation is for educational and research purposes. Mathematical correctness and security properties have been prioritized over production optimizations.*
+*This implementation is for educational and research purposes. Mathematical rigor and correctness are prioritized over performance optimization.*

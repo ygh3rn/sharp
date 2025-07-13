@@ -1,149 +1,217 @@
 #include "three_squares.h"
-#include <iostream>
-#include <fstream>
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
+#include <fstream>
 #include <stdexcept>
-#include <cmath>
 
-ThreeSquares::Decomposition ThreeSquares::compute(const Fr& n) {
-    long n_val = frToLong(n);
-    if (n_val <= 0) {
-        return Decomposition();
+optional<ThreeSquares::Decomposition> ThreeSquares::decompose(const Fr& n) {
+    // Convert Fr to long for PARI/GP computation
+    long n_long = fr_to_long(n);
+    
+    if (n_long < 0) {
+        return nullopt;  // Cannot decompose negative numbers
     }
     
-    return callGPScript(n_val);
+    auto result = call_pari_gp(n_long);
+    if (!result) {
+        return nullopt;
+    }
+    
+    if (result->size() != 3) {
+        return nullopt;
+    }
+    
+    Decomposition decomp;
+    decomp.x = long_to_fr((*result)[0]);
+    decomp.y = long_to_fr((*result)[1]);
+    decomp.z = long_to_fr((*result)[2]);
+    decomp.valid = true;
+    
+    // Verify the decomposition
+    if (!verify(decomp, n)) {
+        return nullopt;
+    }
+    
+    return decomp;
 }
 
-std::vector<Fr> ThreeSquares::computeSharpGSDecomposition(const Fr& xi, const Fr& B) {
-    // Compute 4*xi*(B-xi) + 1 = y1² + y2² + y3²
-    Fr temp1, temp2, target;
-    
-    // temp1 = B - xi
-    Fr::sub(temp1, B, xi);
-    
-    // temp2 = xi * (B - xi)
-    Fr::mul(temp2, xi, temp1);
-    
-    // temp1 = 4 * xi * (B - xi)
-    Fr four(4);
-    Fr::mul(temp1, four, temp2);
-    
-    // target = 4*xi*(B-xi) + 1
-    Fr one(1);
-    Fr::add(target, temp1, one);
-    
-    // Get decomposition
-    Decomposition decomp = compute(target);
-    
+bool ThreeSquares::verify(const Decomposition& decomp, const Fr& n) {
     if (!decomp.valid) {
-        throw std::runtime_error("Failed to compute three squares decomposition");
+        return false;
     }
     
-    return {decomp.x, decomp.y, decomp.z};
-}
-
-bool ThreeSquares::verify(const Fr& x, const Fr& y, const Fr& z, const Fr& n) {
     Fr x_sq, y_sq, z_sq, sum;
+    Fr::sqr(x_sq, decomp.x);
+    Fr::sqr(y_sq, decomp.y);
+    Fr::sqr(z_sq, decomp.z);
     
-    // Compute x²
-    Fr::mul(x_sq, x, x);
-    
-    // Compute y²
-    Fr::mul(y_sq, y, y);
-    
-    // Compute z²
-    Fr::mul(z_sq, z, z);
-    
-    // sum = x² + y²
     Fr::add(sum, x_sq, y_sq);
-    
-    // sum = x² + y² + z²
     Fr::add(sum, sum, z_sq);
     
-    // Check if sum == n
     return sum == n;
 }
 
-ThreeSquares::Decomposition ThreeSquares::callGPScript(long n_val) {
-    try {
-        // Write input to temporary file
-        std::ofstream input_file("input.tmp");
-        if (!input_file) {
-            std::cerr << "Error: Cannot create input file for GP script" << std::endl;
-            return computeFallback(n_val);
-        }
-        input_file << "n = " << n_val << ";" << std::endl;
-        input_file.close();
-        
-        // Execute GP script
-        std::string command = "gp -q three_squares.gp -f < /dev/null > /dev/null 2>&1";
-        int result = std::system(command.c_str());
-        
-        if (result != 0) {
-            std::cerr << "Warning: GP script execution failed, using fallback method" << std::endl;
-            return computeFallback(n_val);
-        }
-        
-        // Read output
-        std::ifstream output_file("output.tmp");
-        if (!output_file) {
-            std::cerr << "Warning: Cannot read GP output, using fallback method" << std::endl;
-            return computeFallback(n_val);
-        }
-        
-        long x_val, y_val, z_val;
-        if (!(output_file >> x_val >> y_val >> z_val)) {
-            std::cerr << "Warning: Invalid GP output format, using fallback method" << std::endl;
-            output_file.close();
-            return computeFallback(n_val);
-        }
-        output_file.close();
-        
-        // Clean up temporary files
-        std::remove("input.tmp");
-        std::remove("output.tmp");
-        
-        // Convert back to Fr and return
-        return Decomposition(longToFr(x_val), longToFr(y_val), longToFr(z_val));
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Exception in GP script call: " << e.what() << std::endl;
-        return computeFallback(n_val);
-    }
-}
-
-ThreeSquares::Decomposition ThreeSquares::computeFallback(long n_val) {
-    // Simple fallback method for small values
-    // This is not optimal but works for testing
+Fr ThreeSquares::compute_range_value(const Fr& x, const Fr& B) {
+    Fr four(4), B_minus_x, four_x, product, result;
     
-    for (long z = 0; z * z <= n_val; ++z) {
-        long remaining = n_val - z * z;
-        
-        for (long y = 0; y * y <= remaining; ++y) {
-            long x_sq = remaining - y * y;
-            
-            // Check if x_sq is a perfect square
-            long x = (long)sqrt(x_sq);
-            if (x * x == x_sq) {
-                return Decomposition(longToFr(x), longToFr(y), longToFr(z));
-            }
-        }
-    }
+    Fr::sub(B_minus_x, B, x);
+    Fr::mul(four_x, four, x);
+    Fr::mul(product, four_x, B_minus_x);
+    Fr::add(result, product, Fr(1));
     
-    // If no decomposition found, return invalid
-    std::cerr << "Warning: Could not find three squares decomposition for " << n_val << std::endl;
-    return Decomposition();
-}
-
-long ThreeSquares::frToLong(const Fr& x) {
-    // Convert Fr to long (assumes small values that fit in long)
-    std::string str = x.getStr(10);  // Get decimal string representation
-    return std::stol(str);
-}
-
-Fr ThreeSquares::longToFr(long x) {
-    Fr result;
-    result.setStr(std::to_string(x));
     return result;
+}
+
+optional<vector<long>> ThreeSquares::call_pari_gp(long n) {
+    // Create temporary PARI/GP script
+    stringstream script;
+    script << "threesquares(" << n << ")";
+    
+    // Write script to temporary file
+    ofstream script_file("/tmp/threesquares_input.gp");
+    if (!script_file) {
+        cerr << "Failed to create temporary script file" << endl;
+        return nullopt;
+    }
+    
+    // Write the threesquares function and call
+    script_file << R"(
+pl = 10^6;
+default(primelimit, pl);
+
+{
+twosquares(n) =
+    local(K, i, v, p, c1, c2);
+    
+    K = bnfinit(x^2 + 1);
+    v = bnfisintnorm(K, n);
+    
+    for(i = 1, #v,
+        p = v[i];
+        c1 = polcoeff(p, 0);
+        c2 = polcoeff(p, 1);
+        
+        if(denominator(c1) == 1 && denominator(c2) == 1,
+            return([c1, c2])
+        )
+    );
+    
+    return([]);
+}
+
+{
+threesquares(n) =
+    local(m, z, i, x1, y1, j, fa, g);
+    
+    if((n / (4^valuation(n, 4))) % 8 == 7,
+        return([])
+    );
+    
+    for(z = 1, n,
+        m = n - z^2;
+        
+        if(m % 4 == 3, next);
+        
+        fa = factor(m, pl);
+        g = 1;
+        
+        for(i = 1, #fa~,
+            if(!ispseudoprime(fa[i,1]) || 
+               (fa[i,2] % 2 == 1 && fa[i,1] % 4 == 3),
+                g = 0;
+                break
+            )
+        );
+        
+        if(!g, next);
+        
+        j = twosquares(m);
+        
+        if(#j >= 2,
+            x1 = abs(j[1]);
+            y1 = abs(j[2]);
+            return([x1, y1, z])
+        );
+    );
+    
+    return([]);
+}
+)";
+    script_file << script.str() << endl;
+    script_file.close();
+    
+    // Execute PARI/GP
+    string command = "gp -q < /tmp/threesquares_input.gp 2>/dev/null";
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        cerr << "Failed to execute PARI/GP" << endl;
+        return nullopt;
+    }
+    
+    // Read output
+    string output;
+    char buffer[128];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output += buffer;
+    }
+    pclose(pipe);
+    
+    // Clean up temporary file
+    remove("/tmp/threesquares_input.gp");
+    
+    // Parse output
+    // Expected format: [x, y, z] or []
+    if (output.find("[]") != string::npos) {
+        return nullopt;  // No decomposition found
+    }
+    
+    // Extract numbers from [x, y, z] format
+    size_t start = output.find('[');
+    size_t end = output.find(']');
+    if (start == string::npos || end == string::npos) {
+        return nullopt;
+    }
+    
+    string numbers = output.substr(start + 1, end - start - 1);
+    vector<long> result;
+    
+    stringstream ss(numbers);
+    string token;
+    while (getline(ss, token, ',')) {
+        // Trim whitespace
+        token.erase(0, token.find_first_not_of(" \t\n\r\f\v"));
+        token.erase(token.find_last_not_of(" \t\n\r\f\v") + 1);
+        
+        if (!token.empty()) {
+            result.push_back(stol(token));
+        }
+    }
+    
+    if (result.size() != 3) {
+        return nullopt;
+    }
+    
+    return result;
+}
+
+Fr ThreeSquares::long_to_fr(long value) {
+    if (value >= 0) {
+        return Fr(static_cast<int>(value));
+    } else {
+        Fr result(static_cast<int>(-value));
+        Fr::neg(result, result);
+        return result;
+    }
+}
+
+long ThreeSquares::fr_to_long(const Fr& value) {
+    // This is a simplified conversion for small values
+    // In practice, you'd need a more robust conversion
+    string str = value.getStr(10);
+    try {
+        return stol(str);
+    } catch (const exception&) {
+        throw invalid_argument("Fr value too large to convert to long");
+    }
 }

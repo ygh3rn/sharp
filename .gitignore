@@ -5,34 +5,23 @@ build/
 *.so
 
 # Executables
-test_sharpgs
-sharpgs_demo
+test_sharp_gs
+sharp_gs_demo
 
 # IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # Temporary files
+/tmp/
 *.tmp
-input.tmp
-output.tmp
+*.log
 
-# Generated files
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-
-# Debug files
-*.dSYM/
-*.su
-
-# GP/PARI temporary files
-*.gp.log
+# PARI/GP temporary files
+/tmp/threesquares_input.gp
