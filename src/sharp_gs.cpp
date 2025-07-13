@@ -132,21 +132,18 @@ SharpGS::Response SharpGS::prove_response(const PublicParameters& pp, const Stat
         
         // LINE 14: Compute zk,i = maskx(γk·xi, x̃k,i) and zk,i,j = maskx(γk·yi,j, ỹk,i,j)
         for (size_t i = 0; i < pp.num_values; i++) {
-            // For simplicity, using additive masking: zk,i = γk·xi + x̃k,i
+            // FIX: Use stored mask from first message: zk,i = γk·xi + x̃k,i
             Fr gamma_xi;
             Fr::mul(gamma_xi, gamma, witness.values[i]);
-            Fr x_tilde;
-            x_tilde.setByCSPRNG();  // Should reuse from first message in real implementation
-            Fr::add(response.z_values[k][i], gamma_xi, x_tilde);
+            Fr::add(response.z_values[k][i], gamma_xi, first_msg.x_tildes[k][i]);
             
             // For squares: zk,i,j = γk·yi,j + ỹk,i,j
             response.z_squares[k][i].resize(3);
             for (size_t j = 0; j < 3; j++) {
                 Fr gamma_yij;
                 Fr::mul(gamma_yij, gamma, square_decomp_values[i][j]);
-                Fr y_tilde;
-                y_tilde.setByCSPRNG();  // Should reuse from first message
-                Fr::add(response.z_squares[k][i][j], gamma_yij, y_tilde);
+                // FIX: Use stored y mask from first message
+                Fr::add(response.z_squares[k][i][j], gamma_yij, first_msg.y_tildes[k][3*i + j]);
             }
         }
         
@@ -154,13 +151,18 @@ SharpGS::Response SharpGS::prove_response(const PublicParameters& pp, const Stat
         // tk,x = maskr(γk·rx, r̃ek,x), tk,y = maskr(γk·ry, r̃ek,y), t*k = maskr(γk·r*k, r̃e*k)
         Fr gamma_rx;
         Fr::mul(gamma_rx, gamma, witness.randomness);
-        Fr re_kx;
-        re_kx.setByCSPRNG();  // Should reuse from first message
-        Fr::add(response.t_x[k], gamma_rx, re_kx);
+        // FIX: Use stored randomness mask from first message
+        Fr::add(response.t_x[k], gamma_rx, first_msg.re_k_x[k]);
         
-        // Simplified for other randomness values
-        response.t_y[k].setByCSPRNG();
-        response.t_star[k].setByCSPRNG();
+        // FIX: Compute t_y correctly using stored values
+        Fr gamma_ry;
+        Fr::mul(gamma_ry, gamma, first_msg.ry);
+        Fr::add(response.t_y[k], gamma_ry, first_msg.re_k_y[k]);
+        
+        // FIX: Compute t_star correctly using stored values  
+        Fr gamma_r_star;
+        Fr::mul(gamma_r_star, gamma, first_msg.r_star_values[k]);
+        Fr::add(response.t_star[k], gamma_r_star, first_msg.re_star_k[k]);
         
         // LINES 17-18: Check for masking failures (simplified - should implement proper rejection sampling)
         // if any masking failed, abort

@@ -79,7 +79,6 @@ optional<vector<long>> ThreeSquares::call_pari_gp(long n) {
     string script_path = "/tmp/threesquares_" + to_string(getpid()) + ".gp";
     ofstream script_file(script_path);
     if (!script_file) {
-        cerr << "Failed to create temporary script file: " << script_path << endl;
         return nullopt;
     }
     
@@ -147,7 +146,6 @@ quit
     string full_command = "gp -q < " + script_path + " 2>/dev/null";
     FILE* pipe = popen(full_command.c_str(), "r");
     if (!pipe) {
-        cerr << "Failed to execute PARI/GP command: " << full_command << endl;
         unlink(script_path.c_str());
         return nullopt;
     }
@@ -163,7 +161,6 @@ quit
     unlink(script_path.c_str());  // Clean up temp file
     
     if (exit_code != 0) {
-        cerr << "PARI/GP execution failed with exit code: " << exit_code << endl;
         return nullopt;
     }
     
@@ -189,7 +186,6 @@ optional<vector<long>> ThreeSquares::parse_gp_output(const string& output) {
         return nullopt;  // No decomposition exists
     }
     
-    cerr << "Failed to parse PARI/GP output: " << output << endl;
     return nullopt;
 }
 
