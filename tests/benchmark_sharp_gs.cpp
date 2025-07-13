@@ -80,34 +80,68 @@ private:
     }
     
     size_t calculate_proof_size(const SharpGS::Proof& proof, const SharpGS::PublicParameters& pp) {
-        size_t size = 0;
+        // Serialize the entire proof structure to get actual byte size
+        vector<uint8_t> proof_bytes;
         
-        // G1 point size (compressed): ~32 bytes
-        const size_t g1_size = 32;
-        // Fr element size: ~32 bytes
-        const size_t fr_size = 32;
+        // Serialize entire proof structure
+        serialize_proof_to_bytes(proof, proof_bytes);
         
-        // First message
-        size += g1_size; // commitment_y
-        size += proof.first_msg.mask_commitments_x.size() * g1_size;
-        size += proof.first_msg.mask_commitments_y.size() * g1_size;
-        size += proof.first_msg.poly_commitments_star.size() * g1_size;
-        size += proof.first_msg.mask_poly_commitments.size() * g1_size;
+        return proof_bytes.size();
+    }
+    
+    void serialize_proof_to_bytes(const SharpGS::Proof& proof, vector<uint8_t>& bytes) {
+        bytes.clear();
         
-        // Response
+        // Serialize first message
+        append_g1_to_bytes(proof.first_msg.commitment_y, bytes);
+        
+        for (const auto& point : proof.first_msg.mask_commitments_x) {
+            append_g1_to_bytes(point, bytes);
+        }
+        for (const auto& point : proof.first_msg.mask_commitments_y) {
+            append_g1_to_bytes(point, bytes);
+        }
+        for (const auto& point : proof.first_msg.poly_commitments_star) {
+            append_g1_to_bytes(point, bytes);
+        }
+        for (const auto& point : proof.first_msg.mask_poly_commitments) {
+            append_g1_to_bytes(point, bytes);
+        }
+        
+        // Serialize response
         for (const auto& z_vec : proof.response.z_values) {
-            size += z_vec.size() * fr_size;
+            for (const auto& fr_val : z_vec) {
+                append_fr_to_bytes(fr_val, bytes);
+            }
         }
         for (const auto& z_mat : proof.response.z_squares) {
             for (const auto& z_vec : z_mat) {
-                size += z_vec.size() * fr_size;
+                for (const auto& fr_val : z_vec) {
+                    append_fr_to_bytes(fr_val, bytes);
+                }
             }
         }
-        size += proof.response.t_x.size() * fr_size;
-        size += proof.response.t_y.size() * fr_size;
-        size += proof.response.t_star.size() * fr_size;
-        
-        return size;
+        for (const auto& fr_val : proof.response.t_x) {
+            append_fr_to_bytes(fr_val, bytes);
+        }
+        for (const auto& fr_val : proof.response.t_y) {
+            append_fr_to_bytes(fr_val, bytes);
+        }
+        for (const auto& fr_val : proof.response.t_star) {
+            append_fr_to_bytes(fr_val, bytes);
+        }
+    }
+    
+    void append_g1_to_bytes(const G1& point, vector<uint8_t>& bytes) {
+        uint8_t temp[256];
+        size_t len = point.serialize(temp, sizeof(temp));
+        bytes.insert(bytes.end(), temp, temp + len);
+    }
+    
+    void append_fr_to_bytes(const Fr& element, vector<uint8_t>& bytes) {
+        uint8_t temp[256]; 
+        size_t len = element.serialize(temp, sizeof(temp));
+        bytes.insert(bytes.end(), temp, temp + len);
     }
 
 public:
@@ -143,7 +177,7 @@ private:
     void benchmark_full_protocol(size_t N, const Fr& B, size_t log_b) {
         auto pp = SharpGS::setup(N, B, 128);
         
-        SharpGS::Proof measured_proof;
+        size_t actual_proof_size = 0;
         double protocol_time = benchmark_operation([&]() {
             SharpGS::Witness witness;
             witness.values.clear();
@@ -161,18 +195,20 @@ private:
             auto challenge = SharpGS::generate_challenge(pp);
             auto response = SharpGS::prove_response(pp, stmt, witness, first_msg, challenge);
             
-            measured_proof.first_msg = first_msg;
-            measured_proof.response = response;
+            SharpGS::Proof proof;
+            proof.first_msg = first_msg;
+            proof.response = response;
             
-            bool verified = SharpGS::verify(pp, stmt, measured_proof, challenge);
+            // MEASURE ACTUAL PROOF SIZE HERE
+            actual_proof_size = calculate_proof_size(proof, pp);
+            
+            bool verified = SharpGS::verify(pp, stmt, proof, challenge);
             if (!verified) throw runtime_error("Verification failed");
         }, 5);
         
-        size_t proof_size = calculate_proof_size(measured_proof, pp);
-        
-        results.push_back({"Full Protocol", N, log_b, pp.repetitions, protocol_time, proof_size, 5});
+        results.push_back({"Full Protocol", N, log_b, pp.repetitions, protocol_time, actual_proof_size, 5});
         cout << "Full Protocol: " << fixed << setprecision(1) << protocol_time << " ms, " 
-             << proof_size << " bytes" << endl;
+             << actual_proof_size << " bytes" << endl;
     }
     
     void benchmark_individual_phases(size_t N, const Fr& B, size_t log_b) {
