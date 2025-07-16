@@ -197,9 +197,9 @@ public:
             }
         }
         
-        cout << "\n" << string(85, '=') << endl;
+        cout << "\n" << string(90, '=') << endl;
         print_table();
-        cout << "\n" << string(85, '=') << endl;
+        cout << "\n" << string(90, '=') << endl;
         analyze_performance();
     }
 
@@ -322,54 +322,33 @@ private:
     
     void print_table() {
         cout << "SharpGS Performance Table (λ=128)" << endl;
-        cout << left << setw(20) << "Operation" 
+        cout << left << setw(25) << "Operation" 
              << setw(5) << "N" 
              << setw(8) << "log B" 
              << setw(5) << "R" 
              << setw(12) << "Time (ms)" 
              << setw(12) << "Full (B)" 
-             << setw(12) << "Hash Opt (B)"
-             << setw(8) << "Iters" << endl;
-        cout << string(85, '-') << endl;
+             << setw(15) << "Hash Opt (B)"
+             << setw(5) << "Iters" << endl;
+        cout << string(90, '-') << endl;
         
         for (const auto& result : results) {
-            cout << left << setw(20) << result.operation
+            cout << left << setw(25) << result.operation
                  << setw(5) << result.batch_size
                  << setw(8) << result.log_b
                  << setw(5) << result.repetitions
                  << setw(12) << fixed << setprecision(1) << result.avg_time_ms
                  << setw(12) << (result.proof_size_bytes > 0 ? 
                      to_string(result.proof_size_bytes) : "-")
-                 << setw(12) << (result.hash_optimized_size > 0 ? 
+                 << setw(15) << (result.hash_optimized_size > 0 ? 
                      to_string(result.hash_optimized_size) : "-")
-                 << setw(8) << result.iterations << endl;
+                 << setw(5) << result.iterations << endl;
         }
-        
-        cout << "\nComparison with Table 1 (λ=128, log B=64):" << endl;
-        cout << "Paper SharpGS: N=1→360B, N=8→1070B, N=16→1882B (R=1, Γ=129)" << endl;
-        cout << "Our implementation uses R=" << ((128 + 19) / 20) << " repetitions instead of R=1" << endl;
-        
-        for (size_t N : {1, 8, 16}) {
-            auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
-                return r.operation == "Full Protocol" && r.batch_size == N && r.log_b == 64;
-            });
-            if (it != results.end()) {
-                cout << "Our impl: N=" << N << "→" << it->hash_optimized_size << "B (hash opt)";
-                cout << " / " << it->proof_size_bytes << "B (full)";
-                if (N == 1) cout << " vs 360B paper";
-                else if (N == 8) cout << " vs 1070B paper";
-                else if (N == 16) cout << " vs 1882B paper";
-                cout << endl;
-            }
-        }
-        
-        cout << "\nNote: Paper uses R=1 with large challenge space Γ=129" << endl;
-        cout << "Our implementation uses R=7 with smaller challenge space for same security level" << endl;
     }
     
     void analyze_performance() {
         cout << "Performance Analysis" << endl;
-        cout << "===================" << endl;
+        cout << "====================" << endl;
         
         // Scaling by batch size
         cout << "\nBatch Size Scaling (log B=64, with hash optimization):" << endl;
@@ -382,27 +361,6 @@ private:
                      << "ms, " << it->hash_optimized_size << " bytes" << endl;
             }
         }
-        
-        // Hash optimization savings
-        cout << "\nHash Optimization Savings:" << endl;
-        for (size_t N : {1, 8, 16}) {
-            auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
-                return r.operation == "Full Protocol" && r.batch_size == N && r.log_b == 64;
-            });
-            if (it != results.end() && it->proof_size_bytes > 0) {
-                size_t savings = it->proof_size_bytes - it->hash_optimized_size;
-                double percent = 100.0 * savings / it->proof_size_bytes;
-                cout << "N=" << N << ": " << savings << " bytes saved (" 
-                     << fixed << setprecision(1) << percent << "% reduction)" << endl;
-            }
-        }
-        
-        // Parameter analysis
-        cout << "\nParameter Analysis:" << endl;
-        cout << "Security parameter λ: 128 bits" << endl;
-        cout << "Repetitions R: " << ((128 + 19) / 20) << endl;
-        cout << "Challenge space: smaller (not optimized like paper)" << endl;
-        cout << "To match paper Table 1, need R=1 with Γ=129" << endl;
     }
 };
 

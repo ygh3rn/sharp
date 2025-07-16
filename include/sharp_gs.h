@@ -33,30 +33,28 @@ public:
         Fr B;                        // Range bound
     };
     
-    // Algorithm 1 - First message structures
+    // First message structures
     struct FirstMessage {
-        G1 commitment_y;                              // Cy (line 2)
+        G1 commitment_y;                              // Cy   (line 2)
         vector<G1> mask_commitments_x;                // Dk,x (line 6)
         vector<G1> mask_commitments_y;                // Dk,y (line 7)
         vector<G1> poly_commitments_star;             // Ck,* (line 11)
         vector<G1> mask_poly_commitments;             // Dk,* (line 12)
-        
-        // Store mask values for reuse in response
         Fr ry;                                        // randomness for Cy
-        vector<Fr> re_k_x, re_k_y, re_star_k;       // randomness for commitments
-        vector<vector<Fr>> x_tildes, y_tildes;       // mask values
-        vector<Fr> r_star_values;                    // r*k values
+        vector<Fr> re_k_x, re_k_y, re_star_k;         // randomness for commitments
+        vector<vector<Fr>> x_tildes, y_tildes;        // mask values
+        vector<Fr> r_star_values;                     // r*k values
     };
     
     struct Challenge {
         vector<Fr> gammas;           // γk ∈ [0, Γ]
     };
     
-    // Algorithm 1 - Response structures  
+    // Response structures  
     struct Response {
-        vector<vector<Fr>> z_values;                  // zk,i (line 14)
-        vector<vector<vector<Fr>>> z_squares;         // zk,i,j (line 14)
-        vector<Fr> t_x, t_y, t_star;                 // tk,x, tk,y, t*k (lines 15-16)
+        vector<vector<Fr>> z_values;                  // zk,i            (line 14)
+        vector<vector<vector<Fr>>> z_squares;         // zk,i,j          (line 14)
+        vector<Fr> t_x, t_y, t_star;                  // tk,x, tk,y, t*k (lines 15-16)
     };
     
     struct Proof {
