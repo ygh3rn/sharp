@@ -25,17 +25,14 @@ PedersenMultiCommitment::CommitmentKey PedersenMultiCommitment::setup_combined(s
     ck.max_values = N + N*3;
     ck.generators.resize(1 + N + N*3);
     
-    // G0 generator
     string seed = "SharpGS_combined_G0";
     hashAndMapToG1(ck.generators[0], seed.c_str(), seed.length());
     
-    // G1, G2, ..., GN generators
     for (size_t i = 1; i <= N; i++) {
         string gen_seed = "SharpGS_combined_G" + to_string(i);
         hashAndMapToG1(ck.generators[i], gen_seed.c_str(), gen_seed.length());
     }
     
-    // Gi,j generators for i=1..N, j=1..3
     for (size_t i = 1; i <= N; i++) {
         for (size_t j = 1; j <= 3; j++) {
             size_t idx = N + 1 + (i-1)*3 + (j-1);

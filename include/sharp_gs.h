@@ -12,49 +12,46 @@ using namespace std;
 class SharpGS {
 public:
     struct PublicParameters {
-        size_t num_values;           // N
-        Fr B;                        // Range bound
-        size_t repetitions;          // R 
-        size_t gamma_max;            // Γ
-        size_t security_bits;        // λ
+        size_t num_values;
+        Fr B;
+        size_t repetitions;
+        size_t gamma_max;
+        size_t security_bits;
         
-        // Commitment keys
-        PedersenMultiCommitment::CommitmentKey ck_com;   // Gcom
-        PedersenMultiCommitment::CommitmentKey ck_3sq;   // G3sq
+        PedersenMultiCommitment::CommitmentKey ck_com;
+        PedersenMultiCommitment::CommitmentKey ck_3sq;
     };
     
     struct Witness {
-        vector<Fr> values;           // xi ∈ [0, B]
-        Fr randomness;               // rx
+        vector<Fr> values;
+        Fr randomness;
     };
     
     struct Statement {
-        G1 commitment;               // Cx = rxG0 + ∑xiGi
-        Fr B;                        // Range bound
+        G1 commitment;
+        Fr B;
     };
     
-    // First message structures
     struct FirstMessage {
-        G1 commitment_y;                              // Cy   (line 2)
-        vector<G1> mask_commitments_x;                // Dk,x (line 6)
-        vector<G1> mask_commitments_y;                // Dk,y (line 7)
-        vector<G1> poly_commitments_star;             // Ck,* (line 11)
-        vector<G1> mask_poly_commitments;             // Dk,* (line 12)
-        Fr ry;                                        // randomness for Cy
-        vector<Fr> re_k_x, re_k_y, re_star_k;         // randomness for commitments
-        vector<vector<Fr>> x_tildes, y_tildes;        // mask values
-        vector<Fr> r_star_values;                     // r*k values
+        G1 commitment_y;
+        vector<G1> mask_commitments_x;
+        vector<G1> mask_commitments_y;
+        vector<G1> poly_commitments_star;
+        vector<G1> mask_poly_commitments;
+        Fr ry;
+        vector<Fr> re_k_x, re_k_y, re_star_k;
+        vector<vector<Fr>> x_tildes, y_tildes;
+        vector<Fr> r_star_values;
     };
     
     struct Challenge {
-        vector<Fr> gammas;           // γk ∈ [0, Γ]
+        vector<Fr> gammas;
     };
     
-    // Response structures  
     struct Response {
-        vector<vector<Fr>> z_values;                  // zk,i            (line 14)
-        vector<vector<vector<Fr>>> z_squares;         // zk,i,j          (line 14)
-        vector<Fr> t_x, t_y, t_star;                  // tk,x, tk,y, t*k (lines 15-16)
+        vector<vector<Fr>> z_values;
+        vector<vector<vector<Fr>>> z_squares;
+        vector<Fr> t_x, t_y, t_star;
     };
     
     struct Proof {

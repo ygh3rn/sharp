@@ -7,10 +7,8 @@
 #include <regex>
 
 optional<ThreeSquares::Decomposition> ThreeSquares::decompose(const Fr& n) {
-    // Convert Fr to string for PARI/GP computation
     string n_str = fr_to_string(n);
     
-    // Special case: 0 = 0² + 0² + 0²
     if (n_str == "0") {
         Decomposition decomp;
         decomp.x = Fr(0);
@@ -35,7 +33,6 @@ optional<ThreeSquares::Decomposition> ThreeSquares::decompose(const Fr& n) {
     decomp.z = string_to_fr((*result)[2]);
     decomp.valid = true;
     
-    // Verify the decomposition
     if (!verify(decomp, n)) {
         return nullopt;
     }
@@ -71,14 +68,12 @@ Fr ThreeSquares::compute_range_value(const Fr& x, const Fr& B) {
 }
 
 optional<vector<string>> ThreeSquares::call_pari_gp_string(const string& n_str) {
-    // Create a unique temporary script file
     string script_path = "/tmp/threesquares_" + to_string(getpid()) + ".gp";
     ofstream script_file(script_path);
     if (!script_file) {
         return nullopt;
     }
     
-    // Write the complete threesquares function
     script_file << R"(
 pl = 10^6;
 default(primelimit, pl);
@@ -138,7 +133,6 @@ quit
 )";
     script_file.close();
     
-    // Execute PARI/GP with the script
     string full_command = "gp -q < " + script_path + " 2>/dev/null";
     FILE* pipe = popen(full_command.c_str(), "r");
     if (!pipe) {
@@ -146,7 +140,6 @@ quit
         return nullopt;
     }
     
-    // Read output
     string output;
     char buffer[256];
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
@@ -154,18 +147,16 @@ quit
     }
     
     int exit_code = pclose(pipe);
-    unlink(script_path.c_str());  // Clean up temp file
+    unlink(script_path.c_str());
     
     if (exit_code != 0) {
         return nullopt;
     }
     
-    // Parse output - look for [x, y, z] format
     return parse_gp_output_string(output);
 }
 
 optional<vector<string>> ThreeSquares::parse_gp_output_string(const string& output) {
-    // Look for pattern like [5, 2, 1] or %9 = [5, 2, 1]
     regex pattern(R"(\[(\d+),\s*(\d+),\s*(\d+)\])");
     smatch matches;
     
@@ -177,9 +168,8 @@ optional<vector<string>> ThreeSquares::parse_gp_output_string(const string& outp
         return result;
     }
     
-    // Check for empty result []
     if (output.find("[]") != string::npos) {
-        return nullopt;  // No decomposition exists
+        return nullopt;
     }
     
     return nullopt;
@@ -192,7 +182,7 @@ Fr ThreeSquares::string_to_fr(const string& str) {
 }
 
 string ThreeSquares::fr_to_string(const Fr& value) {
-    char str_buf[1024];  // Increased buffer size for large numbers
+    char str_buf[1024];
     size_t len = value.getStr(str_buf, sizeof(str_buf), 10);
     if (len == 0) {
         throw runtime_error("Failed to convert Fr to string");
@@ -201,7 +191,6 @@ string ThreeSquares::fr_to_string(const Fr& value) {
 }
 
 long ThreeSquares::fr_to_long(const Fr& value) {
-    // Only for backward compatibility - use fr_to_string for large values
     string str = fr_to_string(value);
     try {
         return stol(str);

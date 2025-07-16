@@ -10,7 +10,6 @@ SharpGS::PublicParameters SharpGS::setup(size_t num_values, const Fr& B, size_t 
     pp.gamma_max = (1 << 20) - 1;
     pp.repetitions = (security_bits + 19) / 20;
     
-    // Algorithm 1: G0, G1...GN, G1,1...GN,3 vs H0, H1...HN
     pp.ck_com = PedersenMultiCommitment::setup_combined(num_values);
     pp.ck_3sq = PedersenMultiCommitment::setup_independent(num_values, "SharpGS_H");
     
@@ -20,10 +19,10 @@ SharpGS::PublicParameters SharpGS::setup(size_t num_values, const Fr& B, size_t 
 SharpGS::FirstMessage SharpGS::prove_first(const PublicParameters& pp, const Statement& stmt, const Witness& witness) {
     FirstMessage msg;
     
-    // Line 1: Compute yi,j s.t. 4xi(B-xi) + 1 = ∑y²i,j
+    // Line 1
     auto square_decomp_values = compute_square_decomposition_values(witness.values, pp.B);
     
-    // Line 2: Set Cy = ryG0 + ∑∑yi,jGi,j
+    // Line 2
     msg.ry.setByCSPRNG();
     vector<Fr> flat_y_values;
     for (const auto& y_triple : square_decomp_values) {
@@ -44,23 +43,23 @@ SharpGS::FirstMessage SharpGS::prove_first(const PublicParameters& pp, const Sta
     msg.y_tildes.resize(pp.repetitions);
     msg.r_star_values.resize(pp.repetitions);
     
-    // Lines 3-12: For all repetitions k
+    // Lines 3-12
     for (size_t k = 0; k < pp.repetitions; k++) {
-        // Lines 4-5: Generate random masks
+        // Lines 4-5
         msg.re_k_x[k].setByCSPRNG();
         msg.re_k_y[k].setByCSPRNG();
         msg.x_tildes[k] = generate_mask_values(pp.num_values);
         msg.y_tildes[k] = generate_mask_values(pp.num_values * 3);
         
-        // Line 6: Dk,x = re_k,x*G0 + ∑x̃k,i*Gi
+        // Line 6
         auto commit_x_masks = PedersenMultiCommitment::commit_with_offset(pp.ck_com, msg.x_tildes[k], msg.re_k_x[k], 0);
         msg.mask_commitments_x[k] = commit_x_masks.value;
         
-        // Line 7: Dk,y = re_k,y*G0 + ∑∑ỹk,i,j*Gi,j
+        // Line 7
         auto commit_y_masks = PedersenMultiCommitment::commit_with_offset(pp.ck_com, msg.y_tildes[k], msg.re_k_y[k], pp.num_values);
         msg.mask_commitments_y[k] = commit_y_masks.value;
         
-        // Lines 8-12: Polynomial computation
+        // Lines 8-12
         msg.r_star_values[k].setByCSPRNG();
         msg.re_star_k[k].setByCSPRNG();
         
@@ -71,18 +70,18 @@ SharpGS::FirstMessage SharpGS::prove_first(const PublicParameters& pp, const Sta
             vector<Fr> y_tildes_i = {msg.y_tildes[k][i*3], msg.y_tildes[k][i*3+1], msg.y_tildes[k][i*3+2]};
             vector<Fr> y_values_i = square_decomp_values[i];
             
-            // Line 9: α*1,k,i = 4x̃k,iB - 8xix̃k,i - 2∑yi,jỹk,i,j
+            // Line 9
             alpha_1_values[i] = compute_alpha_star_1(msg.x_tildes[k][i], witness.values[i], pp.B, y_values_i, y_tildes_i);
             
-            // Line 10: α*0,k,i = -(4x̃²k,i + ∑ỹ²k,i,j)
+            // Line 10
             alpha_0_values[i] = compute_alpha_star_0(msg.x_tildes[k][i], y_tildes_i);
         }
         
-        // Line 11: Ck,* = r*k*H0 + ∑α*1,k,i*Hi
+        // Line 11
         auto commit_poly_star = PedersenMultiCommitment::commit(pp.ck_3sq, alpha_1_values, msg.r_star_values[k]);
         msg.poly_commitments_star[k] = commit_poly_star.value;
         
-        // Line 12: Dk,* = r̃*k*H0 + ∑α*0,k,i*Hi
+        // Line 12
         auto commit_mask_poly = PedersenMultiCommitment::commit(pp.ck_3sq, alpha_0_values, msg.re_star_k[k]);
         msg.mask_poly_commitments[k] = commit_mask_poly.value;
     }
@@ -116,13 +115,13 @@ SharpGS::Response SharpGS::prove_response(const PublicParameters& pp, const Stat
     
     auto square_decomp_values = compute_square_decomposition_values(witness.values, pp.B);
     
-    // Lines 13-18: For all repetitions k
+    // Lines 13-18
     for (size_t k = 0; k < pp.repetitions; k++) {
         Fr gamma = challenge.gammas[k];
         response.z_values[k].resize(pp.num_values);
         response.z_squares[k].resize(pp.num_values);
         
-        // Line 14: zk,i = γk·xi + x̃k,i, zk,i,j = γk·yi,j + ỹk,i,j
+        // Line 14
         for (size_t i = 0; i < pp.num_values; i++) {
             Fr gamma_xi;
             Fr::mul(gamma_xi, gamma, witness.values[i]);
@@ -136,7 +135,7 @@ SharpGS::Response SharpGS::prove_response(const PublicParameters& pp, const Stat
             }
         }
         
-        // Line 15: tk,x = γk·rx + r̃k,x, tk,y = γk·ry + r̃k,y
+        // Line 15
         Fr gamma_rx, gamma_ry;
         Fr::mul(gamma_rx, gamma, witness.randomness);
         Fr::add(response.t_x[k], gamma_rx, first_msg.re_k_x[k]);
@@ -144,7 +143,7 @@ SharpGS::Response SharpGS::prove_response(const PublicParameters& pp, const Stat
         Fr::mul(gamma_ry, gamma, first_msg.ry);
         Fr::add(response.t_y[k], gamma_ry, first_msg.re_k_y[k]);
         
-        // Line 16: t*k = γk·r*k + r̃*k
+        // Line 16
         Fr gamma_rstar;
         Fr::mul(gamma_rstar, gamma, first_msg.r_star_values[k]);
         Fr::add(response.t_star[k], gamma_rstar, first_msg.re_star_k[k]);
@@ -159,7 +158,7 @@ bool SharpGS::verify(const PublicParameters& pp, const Statement& stmt,
     for (size_t k = 0; k < pp.repetitions; k++) {
         Fr gamma = challenge.gammas[k];
         
-        // Line 3: Check Dk,x + γkCx = tk,xG0 + ∑zk,iGi
+        // Line 3
         G1 left_side_x, gamma_cx;
         G1::mul(gamma_cx, stmt.commitment, gamma);
         G1::add(left_side_x, proof.first_msg.mask_commitments_x[k], gamma_cx);
@@ -174,7 +173,7 @@ bool SharpGS::verify(const PublicParameters& pp, const Statement& stmt,
         
         if (!(left_side_x == right_side_x)) return false;
         
-        // Line 4: Check Dk,y + γkCy = tk,yG0 + ∑∑zk,i,jGi,j
+        // Line 4
         G1 left_side_y, gamma_cy;
         G1::mul(gamma_cy, proof.first_msg.commitment_y, gamma);
         G1::add(left_side_y, proof.first_msg.mask_commitments_y[k], gamma_cy);
@@ -192,13 +191,13 @@ bool SharpGS::verify(const PublicParameters& pp, const Statement& stmt,
         
         if (!(left_side_y == right_side_y)) return false;
         
-        // Line 5: f*k,i = 4zk,i(γkB - zk,i) + γ²k - ∑z²k,i,j
+        // Line 5
         vector<Fr> f_star_values(pp.num_values);
         for (size_t i = 0; i < pp.num_values; i++) {
             f_star_values[i] = compute_f_star(proof.response.z_values[k][i], gamma, pp.B, proof.response.z_squares[k][i]);
         }
         
-        // Line 6: Check Dk,* + γkCk,* = t*kH0 + ∑f*k,iHi
+        // Line 6
         G1 left_side_star, gamma_cstar;
         G1::mul(gamma_cstar, proof.first_msg.poly_commitments_star[k], gamma);
         G1::add(left_side_star, proof.first_msg.mask_poly_commitments[k], gamma_cstar);
@@ -217,7 +216,6 @@ bool SharpGS::verify(const PublicParameters& pp, const Statement& stmt,
     return true;
 }
 
-// Helper functions
 vector<Fr> SharpGS::generate_mask_values(size_t count, size_t max_bits) {
     vector<Fr> masks(count);
     random_device rd;
