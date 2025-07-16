@@ -79,7 +79,7 @@ private:
         size_t total_size = 0;
         vector<uint8_t> temp_buffer(128);
         
-        // Serialize first message commitments (WITHOUT hash optimization)
+        // Serialize first message commitments without hash optimization
         size_t len = proof.first_msg.commitment_y.serialize(temp_buffer.data(), temp_buffer.size());
         total_size += len;
         
@@ -135,15 +135,12 @@ private:
         size_t total_size = 0;
         vector<uint8_t> temp_buffer(128);
         
-        // Hash optimization: replace all first message commitments with a single hash
-        // Hash size is typically 32 bytes (SHA-256) or 64 bytes (SHA-512)
-        total_size += 32; // Hash of all commitments (∆)
+        // Hash optimization
+        total_size += 32;
         
-        // Still need to send Cy commitment (used in verification)
         size_t len = proof.first_msg.commitment_y.serialize(temp_buffer.data(), temp_buffer.size());
         total_size += len;
         
-        // Serialize response Fr elements (same as before)
         for (const auto& z_vec : proof.response.z_values) {
             for (const auto& fr_val : z_vec) {
                 len = fr_val.serialize(temp_buffer.data(), temp_buffer.size());
@@ -181,7 +178,6 @@ public:
         
         initPairing(BN_SNARK1);
         
-        // Test configurations from paper
         vector<size_t> batch_sizes = {1, 8, 16};
         vector<size_t> log_b_values = {32, 64, 128};
         
@@ -231,7 +227,6 @@ private:
             proof.first_msg = first_msg;
             proof.response = response;
             
-            // MEASURE ACTUAL PROOF SIZES
             actual_proof_size = calculate_actual_proof_size(proof, pp);
             hash_opt_size = calculate_hash_optimized_size(proof, pp);
             
@@ -349,8 +344,6 @@ private:
     void analyze_performance() {
         cout << "Performance Analysis" << endl;
         cout << "====================" << endl;
-        
-        // Scaling by batch size
         cout << "\nBatch Size Scaling (log B=64, with hash optimization):" << endl;
         for (size_t N : {1, 8, 16}) {
             auto it = find_if(results.begin(), results.end(), [N](const BenchmarkResult& r) {
