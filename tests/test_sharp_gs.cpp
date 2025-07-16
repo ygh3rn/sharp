@@ -118,11 +118,9 @@ private:
         
         try {
             Fr B(100);
-            auto pp = SharpGS::setup(3, B, 128);  // N=3 for testing
+            auto pp = SharpGS::setup(3, B, 128);
             
-            // Algorithm 1 requires: G0, Gi for i∈[1,N], Gi,j for i∈[1,N], j∈[1,3]
-            // Total generators for Gcom should be: 1 + N + N*3 = 1 + 3 + 9 = 13
-            size_t expected_gcom_generators = 1 + 3 + 3*3;  // G0 + Gi + Gi,j
+            size_t expected_gcom_generators = 1 + 3 + 3*3;
             
             if (pp.ck_com.generators.size() != expected_gcom_generators) {
                 correct_structure = false;
@@ -130,7 +128,6 @@ private:
                               " generators in Gcom, got " + to_string(pp.ck_com.generators.size());
             }
             
-            // Verify generator independence (they should be different points)
             set<string> generator_set;
             for (const auto& gen : pp.ck_com.generators) {
                 string gen_str;
@@ -160,11 +157,9 @@ private:
         
         try {
             Fr B(100);
-            auto pp = SharpGS::setup(3, B, 128);  // N=3
+            auto pp = SharpGS::setup(3, B, 128);
             
-            // Algorithm 1 requires: H0, Hi for i∈[1,N] in G3sq
-            // Total generators for G3sq should be: 1 + N = 1 + 3 = 4
-            size_t expected_g3sq_generators = 1 + 3;  // H0 + Hi
+            size_t expected_g3sq_generators = 1 + 3;
             
             if (pp.ck_3sq.generators.size() != expected_g3sq_generators) {
                 correct_structure = false;
@@ -188,7 +183,6 @@ private:
             Fr B(100);
             auto pp = SharpGS::setup(2, B, 128);
             
-            // Verify Gcom and G3sq generators are independent
             set<string> all_generators;
             
             for (const auto& gen : pp.ck_com.generators) {
@@ -207,7 +201,7 @@ private:
                 
                 if (all_generators.count(gen_str)) {
                     independent = false;
-                    issue_details = "Gcom and G3sq share generators (violates Algorithm 1)";
+                    issue_details = "Gcom and G3sq share generators";
                     break;
                 }
             }
@@ -220,16 +214,16 @@ private:
         test("Generator Independence", independent, issue_details);
     }
     
-    // Test 2: Algorithm 1 Step Verification
+    // Test 2: Step Verification
     void test_sharpgs_line1_decomposition() {
         bool line1_correct = true;
         string issue_details;
         
         try {
             Fr B(100);
-            vector<Fr> values = {Fr(25), Fr(42)};  // N=2
+            vector<Fr> values = {Fr(25), Fr(42)}; 
             
-            // Line 1: Compute yi,j s.t. 4xi(B - xi) + 1 = ∑y²i,j for i ∈ [1, N]
+            // Line 1
             for (size_t i = 0; i < values.size(); i++) {
                 Fr xi = values[i];
                 Fr range_val = ThreeSquares::compute_range_value(xi, B);
@@ -241,7 +235,6 @@ private:
                     break;
                 }
                 
-                // Verify decomposition: x² + y² + z² = 4xi(B-xi) + 1
                 Fr sum_squares;
                 Fr x_sq, y_sq, z_sq;
                 Fr::sqr(x_sq, decomp->x);
@@ -284,16 +277,11 @@ private:
             
             auto first_msg = SharpGS::prove_first(pp, stmt, witness);
             
-            // Line 2: Set Cy = ryG0 + ∑∑yi,jGi,j for ry ←$ [0, S]
-            // Check if Cy commitment was created properly
+            // Line 2
             if (first_msg.commitment_y.isZero()) {
                 line2_correct = false;
                 issue_details = "Cy commitment is zero (not properly computed)";
-            }
-            
-            // Verify Cy uses correct generator structure (should use Gi,j generators)
-            // This requires checking if the commitment was formed with square decomposition values
-            
+            }      
         } catch (const exception& e) {
             line2_correct = false;
             issue_details = "Exception: " + string(e.what());
@@ -321,7 +309,7 @@ private:
             
             auto first_msg = SharpGS::prove_first(pp, stmt, witness);
             
-            // Lines 3-12: for all k ∈ [1, R] do...
+            // Lines 3-12
             size_t expected_repetitions = pp.repetitions;
             
             if (first_msg.mask_commitments_x.size() != expected_repetitions) {
@@ -347,10 +335,6 @@ private:
                 issue_details = "Dk,* size mismatch: expected " + to_string(expected_repetitions) + 
                               ", got " + to_string(first_msg.mask_poly_commitments.size());
             }
-            
-            // Check if Ck,* and Dk,* are in G3sq (different group)
-            // This is a critical group switching requirement
-            
         } catch (const exception& e) {
             first_flow_correct = false;
             issue_details = "Exception: " + string(e.what());
@@ -380,10 +364,7 @@ private:
             auto challenge = SharpGS::generate_challenge(pp);
             auto response = SharpGS::prove_response(pp, stmt, witness, first_msg, challenge);
             
-            // Lines 14-16: Check masking implementation
-            // zk,i = maskx(γk · xi, x̃k,i), zk,i,j = maskx(γk · yi,j, ỹk,i,j)
-            // tk,x = maskr(γkrx, r̃k,x), tk,y = maskr(γk · ry, r̃k,y)
-            
+            // Lines 14-16
             size_t N = witness.values.size();
             size_t R = pp.repetitions;
             
@@ -446,13 +427,6 @@ private:
             proof.first_msg = first_msg;
             proof.response = response;
             
-            // The verification should implement the specific checks from SharpGS:
-            // Line 3: Check Dk,x + γkCx = tk,xG0 + ∑zk,iGi
-            // Line 4: Check Dk,y + γkCy = tk,yG0 + ∑∑zk,i,jGi,j
-            // Line 5: Set f*k,i = 4zk,i(γkB - zk,i) + γ²k - ∑z²k,i,j
-            // Line 6: Check Dk,* + γkCk,* = t*kH0 + ∑f*k,iHi
-            // Line 7: Check zk,i, zk,i,j ∈ [0,(BΓ + 1)Lx]
-            
             bool verified = SharpGS::verify(pp, stmt, proof, challenge);
             
             if (!verified) {
@@ -474,23 +448,20 @@ private:
         string issue_details;
         
         try {
-            // Algorithm 1 Line 9: α*1,k,i = 4x̃k,iB - 8xix̃k,i - 2∑yijk̃,i,j
-            // Algorithm 1 Line 10: α*0,k,i = -(4x̃²k,i + ∑ỹ²k,i,j)
-            
+            // Line 9-10
             Fr B(100), x(25), x_tilde(10);
-            vector<Fr> y_vals = {Fr(3), Fr(4), Fr(5)};  // yi,j values
-            vector<Fr> y_tildes = {Fr(1), Fr(2), Fr(3)};  // ỹk,i,j values
+            vector<Fr> y_vals = {Fr(3), Fr(4), Fr(5)};
+            vector<Fr> y_tildes = {Fr(1), Fr(2), Fr(3)};
             
-            // Test α*1,k,i computation
             Fr expected_alpha1;
             Fr four(4), eight(8), two(2);
             Fr term1, term2, term3_sum;
             
             Fr::mul(term1, four, x_tilde);
-            Fr::mul(term1, term1, B);  // 4x̃k,iB
+            Fr::mul(term1, term1, B);
             
             Fr::mul(term2, eight, x);
-            Fr::mul(term2, term2, x_tilde);  // 8xix̃k,i
+            Fr::mul(term2, term2, x_tilde);
             
             term3_sum.clear();
             for (size_t j = 0; j < 3; j++) {
@@ -498,14 +469,10 @@ private:
                 Fr::mul(prod, y_vals[j], y_tildes[j]);
                 Fr::add(term3_sum, term3_sum, prod);
             }
-            Fr::mul(term3_sum, two, term3_sum);  // 2∑yij ỹk,i,j
+            Fr::mul(term3_sum, two, term3_sum);
             
             Fr::sub(expected_alpha1, term1, term2);
-            Fr::sub(expected_alpha1, expected_alpha1, term3_sum);
-            
-            // Note: This test reveals if your implementation computes α* values correctly
-            // according to Algorithm 1 specifications
-            
+            Fr::sub(expected_alpha1, expected_alpha1, term3_sum);    
         } catch (const exception& e) {
             alpha_correct = false;
             issue_details = "Exception: " + string(e.what());
@@ -519,21 +486,20 @@ private:
         string issue_details;
         
         try {
-            // Algorithm 1 Line 5: f*k,i = 4zk,i(γkB - zk,i) + γ²k - ∑z²k,i,j
+            // Line 5
             Fr gamma(7), B(100), z_val(30);
             vector<Fr> z_squares = {Fr(2), Fr(3), Fr(5)};
             
             Fr result = SharpGS::compute_f_star(z_val, gamma, B, z_squares);
             
-            // Manually compute expected value
             Fr four(4), gamma_B, gamma_B_minus_z, first_term, gamma_sq, sum_z_sq, expected;
             
             Fr::mul(gamma_B, gamma, B);
             Fr::sub(gamma_B_minus_z, gamma_B, z_val);
             Fr::mul(first_term, four, z_val);
-            Fr::mul(first_term, first_term, gamma_B_minus_z);  // 4zk,i(γkB - zk,i)
+            Fr::mul(first_term, first_term, gamma_B_minus_z);
             
-            Fr::sqr(gamma_sq, gamma);  // γ²k
+            Fr::sqr(gamma_sq, gamma);
             
             sum_z_sq.clear();
             for (const Fr& zs : z_squares) {
@@ -563,8 +529,6 @@ private:
         string issue_details;
         
         try {
-            // Verify that the polynomial f*k,i is constructed consistently
-            // with the decomposition relationship
             Fr B(100);
             vector<Fr> test_values = {Fr(0), Fr(25), Fr(50), Fr(99)};
             
@@ -578,7 +542,6 @@ private:
                     break;
                 }
                 
-                // Verify: 4x(B-x) + 1 = y₁² + y₂² + y₃²
                 Fr lhs = range_val;
                 Fr rhs;
                 Fr y1_sq, y2_sq, y3_sq;
@@ -603,7 +566,6 @@ private:
         test("Decomposition Polynomial Consistency", consistency, issue_details);
     }
     
-    // Helper function to convert Fr to long (if small enough)
     long fr_to_long(const Fr& value) {
         char str_buf[256];
         size_t len = value.getStr(str_buf, sizeof(str_buf), 10);
@@ -621,15 +583,12 @@ private:
         string issue_details;
         
         try {
-            // Algorithm 1 specifies maskx and maskr functions with specific properties
-            // Lines 17-18: if any zk,i, tk,x or t*k is ⊥ then abort
-            
+            // Lines 17-18 
             Fr B(100);
             auto pp = SharpGS::setup(1, B, 128);
             
-            // Test if masking can abort (rejection sampling)
             bool abort_possible = false;
-            for (int i = 0; i < 100; i++) {  // Multiple attempts
+            for (int i = 0; i < 100; i++) {
                 try {
                     SharpGS::Witness witness;
                     witness.values = {Fr(42)};
@@ -651,11 +610,7 @@ private:
                         break;
                     }
                 }
-            }
-            
-            // Note: If masking never aborts, this might indicate incorrect implementation
-            // Algorithm 1 requires rejection sampling with non-zero abort probability
-            
+            }                      
         } catch (const exception& e) {
             masking_correct = false;
             issue_details = "Exception: " + string(e.what());
@@ -666,10 +621,7 @@ private:
     
     void test_abort_probability() {
         bool abort_behavior_correct = true;
-        string issue_details;
-        
-        // Algorithm 1 has specific abort probabilities px, pr
-        // This should be implemented in the masking algorithm
+        string issue_details; 
         
         test("Abort Probability Behavior", abort_behavior_correct, issue_details);
     }
@@ -684,16 +636,13 @@ private:
             
             auto challenge = SharpGS::generate_challenge(pp);
             
-            // Algorithm 1: γk ←$ [0, Γ] for k ∈ [1, R]
             if (challenge.gammas.size() != pp.repetitions) {
                 bounds_correct = false;
                 issue_details = "Challenge count mismatch: expected " + to_string(pp.repetitions) + 
                               ", got " + to_string(challenge.gammas.size());
             }
             
-            // Check if challenges are within bounds [0, Γ]
             for (const Fr& gamma : challenge.gammas) {
-                // Convert to numeric value and check bounds
                 long gamma_val = fr_to_long(gamma);
                 if (gamma_val < 0 || gamma_val > (long)pp.gamma_max) {
                     bounds_correct = false;
@@ -719,10 +668,7 @@ private:
             Fr B(100);
             auto pp = SharpGS::setup(1, B, 128);
             
-            // Algorithm 1 requires commitments in Gcom and polynomial commitments in G3sq
-            // Check if ck_com and ck_3sq are actually different
             if (pp.ck_com.generators.size() == pp.ck_3sq.generators.size()) {
-                // This might indicate they're using the same group
                 bool same_generators = true;
                 for (size_t i = 0; i < min(pp.ck_com.generators.size(), pp.ck_3sq.generators.size()); i++) {
                     if (!(pp.ck_com.generators[i] == pp.ck_3sq.generators[i])) {
@@ -749,7 +695,6 @@ private:
         bool gcom_consistency = true;
         string issue_details;
         
-        // Test that Cx, Cy, Dk,x, Dk,y are all in Gcom
         test("Gcom Commitment Consistency", gcom_consistency, issue_details);
     }
     
@@ -757,7 +702,6 @@ private:
         bool g3sq_consistency = true;
         string issue_details;
         
-        // Test that Ck,*, Dk,* are in G3sq
         test("G3sq Decomposition Consistency", g3sq_consistency, issue_details);
     }
     
@@ -768,7 +712,7 @@ private:
         
         try {
             Fr B(100);
-            auto pp = SharpGS::setup(3, B, 128);  // N=3 for batch
+            auto pp = SharpGS::setup(3, B, 128);
             
             SharpGS::Witness witness;
             witness.values = {Fr(25), Fr(42), Fr(75)};
@@ -779,11 +723,7 @@ private:
             stmt.commitment = commit.value;
             stmt.B = B;
             
-            auto first_msg = SharpGS::prove_first(pp, stmt, witness);
-            
-            // Algorithm 1 should handle batch commitments correctly
-            // The commitment structure should accommodate N values
-            
+            auto first_msg = SharpGS::prove_first(pp, stmt, witness);                   
         } catch (const exception& e) {
             batch_correct = false;
             issue_details = "Exception: " + string(e.what());
@@ -796,7 +736,6 @@ private:
         bool batch_response_correct = true;
         string issue_details;
         
-        // Test batch response computation for multiple values
         test("Batch Response Computation", batch_response_correct, issue_details);
     }
     
@@ -804,7 +743,6 @@ private:
         bool batch_verification_correct = true;
         string issue_details;
         
-        // Test batch verification equations
         test("Batch Verification Equations", batch_verification_correct, issue_details);
     }
     
@@ -813,7 +751,6 @@ private:
         bool hiding = true;
         string issue_details;
         
-        // Test zero-knowledge property
         test("Hiding Property", hiding, issue_details);
     }
     
@@ -821,7 +758,6 @@ private:
         bool binding = true;
         string issue_details;
         
-        // Test commitment binding
         test("Binding Property", binding, issue_details);
     }
     
@@ -829,7 +765,6 @@ private:
         bool soundness = true;
         string issue_details;
         
-        // Test relaxed soundness
         test("Soundness Properties", soundness, issue_details);
     }
     
@@ -840,7 +775,7 @@ private:
         
         try {
             Fr B(100);
-            vector<Fr> boundary_values = {Fr(0), Fr(1), Fr(99)};  // B-1, not B
+            vector<Fr> boundary_values = {Fr(0), Fr(1), Fr(99)};
             
             for (const Fr& val : boundary_values) {
                 auto pp = SharpGS::setup(1, B, 128);
@@ -883,14 +818,11 @@ private:
         string issue_details;
         
         try {
-            // Test values that cannot be decomposed into three squares
-            // According to three squares theorem, numbers of form 4^a(8b+7) cannot be decomposed
             vector<long> invalid_values = {7, 15, 23, 28, 31, 39, 47, 55, 60, 63};
             
             for (long val : invalid_values) {
                 auto decomp = ThreeSquares::decompose(Fr(val));
                 if (decomp && decomp->valid) {
-                    // This might indicate incorrect decomposition logic
                     invalid_handling = false;
                     issue_details = "Value " + to_string(val) + " should not be decomposable but was decomposed";
                     break;
@@ -910,35 +842,21 @@ private:
         string issue_details;
         
         try {
-            // Test various parameter edge cases
-            
-            // Test B = 0
             try {
                 Fr B_zero(0);
                 auto pp = SharpGS::setup(1, B_zero, 128);
-                // This should probably fail or handle gracefully
-            } catch (...) {
-                // Expected behavior
-            }
+            } catch (...) {}
             
-            // Test N = 0
             try {
                 Fr B(100);
                 auto pp = SharpGS::setup(0, B, 128);
-                // This should probably fail
-            } catch (...) {
-                // Expected behavior
-            }
+            } catch (...) {}
             
-            // Test very large values
             Fr B_large;
             B_large.setStr("1000000000000000000000000000000000");
             try {
                 auto pp = SharpGS::setup(1, B_large, 128);
-                // Should handle large values appropriately
-            } catch (...) {
-                // May be expected for very large values
-            }
+            } catch (...) {}
             
         } catch (const exception& e) {
             validation_correct = false;
